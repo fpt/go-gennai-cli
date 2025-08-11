@@ -1,0 +1,8 @@
+{
+  "name": "anthropic",
+  "llm": {
+    "backend": "anthropic",
+    "model": "claude-3-7-sonnet-latest",
+    "maxTokens": 12000
+  }
+}
