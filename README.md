@@ -4,7 +4,7 @@ A CLI-based scenario-runner AI agent supporting multiple LLM backends, using ReA
 
 Default scenario focuses on coding tasks with ToDo management, various built-in tools, and user-configured tools via MCP client functionality.
 
-The name, GENNAI comes from both 'GENeric sceNario-runner for AI' and Gennai Hiraga, a historic inventor of Japan.
+The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan.
 
 ## Features
 
@@ -37,7 +37,7 @@ go install github.com/fpt/go-gennai-cli/gennai@latest
 
 NOTE: OpenAI is not tested at this moment.
 
-**For Google Gemini:**
+**For Google Gemini (has limitation):**
 - Set `GEMINI_API_KEY` environment variable
 
 ### Basic Usage
@@ -140,8 +140,8 @@ This is an example of [godevmcp](https://github.com/fpt/go-dev-mcp).
 
 - **Anthropic (Recommended)**: `claude-sonnet-4-20250514`, `claude-opus-4-20250514`, `claude-3-7-sonnet-latest`, `claude-3-5-haiku-latest`
 - **OpenAI**: `gpt-5`, `gpt-5-mini`, `gpt-4o`, `gpt-4o-mini`
-- **Google Gemini**: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
 - **Ollama**: `gpt-oss:latest`, `gpt-oss:120b`
+- **Google Gemini (Not recommended)**: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
 
 ## Example Usage
 

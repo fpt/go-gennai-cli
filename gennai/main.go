@@ -135,7 +135,7 @@ func main() {
 	// Update global logger level so all component loggers use the new level
 	pkgLogger.SetGlobalLogLevel(pkgLogger.LogLevel(logLevel))
 	logger := pkgLogger.NewLogger(pkgLogger.LogLevel(logLevel))
-	
+
 	// Log the current log level for debugging
 	if resolvedVerbose {
 		logger.DebugWithIcon("📊", "Verbose logging enabled", "log_level", logLevel)
@@ -204,7 +204,7 @@ func main() {
 			}
 		}
 
-		llmClient, err = ollama.NewOllamaClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
+		llmClient, err = ollama.NewOllamaClient(settings.LLM.Model, settings.LLM.MaxTokens, settings.LLM.Thinking)
 		if err != nil {
 			logger.ErrorWithIcon("❌", "Failed to create Ollama client", "error", err)
 			os.Exit(1)

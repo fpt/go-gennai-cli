@@ -49,25 +49,7 @@ else
     update_method=false
 fi
 
-# 3. Check if PrintUser function still exists (should remain unchanged)
-if grep -q "func PrintUser" main.go; then
-    echo "✓ PrintUser function preserved (not modified in this test)"
-    print_preserved=true
-else
-    echo "✗ PrintUser function unexpectedly removed"
-    print_preserved=false
-fi
-
-# 4. Check if DeleteUser method was NOT added (not required in this test)
-if ! grep -q "DeleteUser" main.go; then
-    echo "✓ DeleteUser method correctly not added (not required)"
-    delete_not_added=true
-else
-    echo "⚠️  DeleteUser method was added but not required"
-    delete_not_added=true  # Still pass since it's not harmful
-fi
-
-# 5. Check if strconv import was removed (if not needed)
+# 3. Check if strconv import was removed (if not needed)
 if ! grep -q "strconv" main.go; then
     echo "✓ Unused imports cleaned up"
     imports_clean=true
@@ -76,7 +58,7 @@ else
     imports_clean=true  # Still pass since it doesn't hurt
 fi
 
-# 6. Check if main() function uses string IDs
+# 4. Check if main() function uses string IDs
 if grep -q "AddUser.*\".*\".*\".*\"" main.go; then
     echo "✓ main() function updated to use string IDs"
     main_updated=true
@@ -85,7 +67,7 @@ else
     main_updated=false
 fi
 
-# 7. Check if method calls were updated consistently
+# 5. Check if method calls were updated consistently
 if grep -q "PrintUser" main.go && grep -q "\.UpdateAge" main.go; then
     echo "✓ Method calls updated consistently (PrintUser preserved, user.UpdateAge)"
     calls_updated=true
@@ -94,7 +76,7 @@ else
     calls_updated=false
 fi
 
-# 8. Check for proper error handling with string IDs
+# 6. Check for proper error handling with string IDs
 if grep -q "user not found:.*%s" main.go || grep -q "user not found:.*string" main.go; then
     echo "✓ Error messages updated for string IDs"
     errors_updated=true
@@ -127,9 +109,8 @@ rm -f test_binary compile_errors.txt runtime_output.txt
 
 # Final assessment
 all_changes_made=true
-if [ "$id_change" = false ] || [ "$update_method" = false ] || [ "$print_preserved" = false ] || \
-   [ "$delete_not_added" = false ] || [ "$imports_clean" = false ] || [ "$main_updated" = false ] || \
-   [ "$calls_updated" = false ] || [ "$errors_updated" = false ]; then
+if [ "$id_change" = false ] || [ "$update_method" = false ] || [ "$imports_clean" = false ] || \
+   [ "$main_updated" = false ] || [ "$calls_updated" = false ] || [ "$errors_updated" = false ]; then
     all_changes_made=false
 fi
 

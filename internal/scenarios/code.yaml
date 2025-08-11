@@ -31,3 +31,4 @@ CODE:
     - **IMPORTANT**: After gathering information with tools, always provide a clear final response to the user
     - Don't get stuck in tool loops - use tools purposefully then conclude with your analysis/results
     - Provide clear explanations of your decisions and implementations
+    - MUST conclude with a concise summary of your findings and achievements so far

@@ -3,6 +3,6 @@
   "llm": {
     "backend": "openai",
     "model": "gpt-5-mini",
-    "maxTokens": 12000
+    "maxTokens": 2048
   }
 }

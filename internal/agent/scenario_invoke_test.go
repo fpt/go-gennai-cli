@@ -17,7 +17,7 @@ type mockToolCallingLLM struct {
 	toolManager domain.ToolManager
 }
 
-func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
+func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
 
@@ -48,7 +48,7 @@ func TestInvokeWithScenario(t *testing.T) {
 	// Create scenario runner with mock scenarios
 	workingDir := "/tmp/test"
 	todoManager := tool.NewTodoToolManager(workingDir)
-	fsConfig := infra.DevelopmentFileSystemConfig(workingDir)
+	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
 	bashConfig := tool.BashConfig{WorkingDir: workingDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)

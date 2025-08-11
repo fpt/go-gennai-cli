@@ -3,12 +3,16 @@ package ollama
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 	"github.com/ollama/ollama/api"
+	"github.com/pkg/errors"
 )
+
+const temperature = 0.1 // Default temperature for Ollama chat requests
 
 // OllamaCore contains shared Ollama client resources and core functionality
 // This allows efficient resource sharing between different Ollama client types
@@ -16,15 +20,21 @@ type OllamaCore struct {
 	client    *api.Client
 	model     string
 	maxTokens int
+	thinking  bool // Settings-based thinking control
 }
 
 // NewOllamaCore creates a new Ollama core with shared resources
 func NewOllamaCore(model string) (*OllamaCore, error) {
-	return NewOllamaCoreWithTokens(model, 0) // 0 = use default
+	return NewOllamaCoreWithOptions(model, 0, true) // 0 = use default, true = enable thinking
 }
 
 // NewOllamaCoreWithTokens creates a new Ollama core with configurable maxTokens
 func NewOllamaCoreWithTokens(model string, maxTokens int) (*OllamaCore, error) {
+	return NewOllamaCoreWithOptions(model, maxTokens, true) // true = enable thinking
+}
+
+// NewOllamaCoreWithOptions creates a new Ollama core with configurable maxTokens and thinking
+func NewOllamaCoreWithOptions(model string, maxTokens int, thinking bool) (*OllamaCore, error) {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Ollama client: %w", err)
@@ -39,6 +49,7 @@ func NewOllamaCoreWithTokens(model string, maxTokens int) (*OllamaCore, error) {
 		client:    client,
 		model:     model,
 		maxTokens: maxTokens,
+		thinking:  thinking,
 	}, nil
 }
 
@@ -52,6 +63,68 @@ func (c *OllamaCore) Model() string {
 	return c.model
 }
 
+func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest) (api.Message, error) {
+	var result api.Message
+	var contentBuilder strings.Builder
+	var thinkingBuilder strings.Builder
+	var hasShownThinkingHeader bool
+
+	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
+		// Accumulate content and thinking from streaming responses
+		if resp.Message.Content != "" {
+			contentBuilder.WriteString(resp.Message.Content)
+		}
+
+		if resp.Message.Thinking != "" {
+			// Show thinking header only once when first thinking token arrives
+			if !hasShownThinkingHeader && shouldShowThinking(c.thinking, chatRequest.Think) {
+				fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
+				hasShownThinkingHeader = true
+			}
+
+			// Display thinking tokens progressively in light gray (only if thinking is enabled)
+			if shouldShowThinking(c.thinking, chatRequest.Think) {
+				fmt.Printf("\x1b[90m%s", resp.Message.Thinking) // Light gray (keep color active)
+				os.Stdout.Sync()                                // Ensure immediate display of thinking tokens
+			}
+
+			thinkingBuilder.WriteString(resp.Message.Thinking)
+		}
+
+		if resp.Done {
+			// Add newline after thinking if it was shown
+			if hasShownThinkingHeader {
+				fmt.Print("\x1b[0m\n") // Reset color and newline
+			}
+
+			// Combine accumulated content and thinking
+			result = api.Message{
+				Role:     resp.Message.Role,
+				Content:  contentBuilder.String(),
+				Thinking: thinkingBuilder.String(),
+			}
+			// Copy other fields from the final response
+			if len(resp.Message.ToolCalls) > 0 {
+				result.ToolCalls = resp.Message.ToolCalls
+			}
+		}
+
+		return nil
+	})
+
+	return result, errors.Wrap(err, "ollama chat error")
+}
+
+// shouldShowThinking determines if thinking should be displayed based on settings and request parameters
+func shouldShowThinking(settingsThinking bool, requestThink *bool) bool {
+	if requestThink != nil {
+		// Explicit parameter takes precedence (from ChatWithThinking)
+		return *requestThink
+	}
+	// Use settings-based thinking control (from Chat)
+	return settingsThinking
+}
+
 // OllamaClient implements tool calling and thinking capabilities for Ollama
 // Implements domain.ToolCallingLLMWithThinking interface when both capabilities are available
 type OllamaClient struct {
@@ -59,15 +132,9 @@ type OllamaClient struct {
 	toolManager domain.ToolManager // For native tool calling
 }
 
-// NewOllamaClient creates a new Ollama client with appropriate capabilities based on the model
-// Returns either OllamaClient (for native tool calling) or SchemaBasedToolCallingClient (for universal tool calling)
-func NewOllamaClient(model string) (domain.ToolCallingLLM, error) {
-	return NewOllamaClientWithTokens(model, 0) // 0 = use default
-}
-
-// NewOllamaClientWithTokens creates a new Ollama client with configurable maxTokens
-func NewOllamaClientWithTokens(model string, maxTokens int) (domain.ToolCallingLLM, error) {
-	core, err := NewOllamaCoreWithTokens(model, maxTokens)
+// NewOllamaClient creates a new Ollama client with configurable maxTokens and thinking
+func NewOllamaClient(model string, maxTokens int, thinking bool) (domain.ToolCallingLLM, error) {
+	core, err := NewOllamaCoreWithOptions(model, maxTokens, thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +201,7 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		Model:    c.model,
 		Messages: ollamaMessages,
 		Options: map[string]any{
-			"temperature": 0.1,
+			"temperature": temperature,
 			"num_predict": c.maxTokens, // Max output tokens for Ollama
 		},
 	}
@@ -162,63 +229,14 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
-	var allContent strings.Builder
-	var allToolCalls []api.ToolCall
-
-	// Create a channel to signal when we should stop streaming
-	done := make(chan struct{})
-
-	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
-		// Check if we should stop streaming
-		select {
-		case <-done:
-			// Streaming cancelled - first tool call received
-			return fmt.Errorf("streaming cancelled")
-		default:
-		}
-
-		allContent.WriteString(resp.Message.Content)
-		allToolCalls = append(allToolCalls, resp.Message.ToolCalls...)
-
-		// Streaming response received
-
-		// If we got a tool call, signal to stop streaming
-		if len(resp.Message.ToolCalls) > 0 {
-			close(done)
-		}
-
-		return nil
-	})
-
-	if err != nil && !strings.Contains(err.Error(), "streaming cancelled") {
+	result, err := c.chat(ctx, chatRequest)
+	if err != nil {
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
 
-	// Debug: Log approximate token usage for Ollama (estimation based on content length)
-	contentLength := allContent.Len()
-	estimatedInputTokens := 0
-	for _, msg := range ollamaMessages {
-		estimatedInputTokens += len(strings.Fields(msg.Content)) // Rough word count approximation
-	}
-	estimatedOutputTokens := len(strings.Fields(allContent.String())) // Rough word count approximation
-	maxTokens := 8192                                                 // From num_predict option
-	utilizationPct := float64(estimatedOutputTokens) / float64(maxTokens) * 100
-
-	fmt.Printf("DEBUG: Ollama API Usage - Input: ~%d tokens, Output: ~%d tokens, Content Length: %d chars, Model: %s\n",
-		estimatedInputTokens, estimatedOutputTokens, contentLength, c.model)
-	fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (~%d/%d)\n",
-		utilizationPct, estimatedOutputTokens, maxTokens)
-
-	// Warn if we're approaching the limit
-	if utilizationPct > 90 {
-		fmt.Printf("⚠️  WARNING: Very high token usage (%.1f%%) - potential truncation risk!\n", utilizationPct)
-	} else if utilizationPct > 80 {
-		fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
-	}
-
 	// If we have tool calls, return the first one
-	if len(allToolCalls) > 0 {
-		firstToolCall := allToolCalls[0]
+	if len(result.ToolCalls) > 0 {
+		firstToolCall := result.ToolCalls[0]
 		return message.NewToolCallMessage(
 			message.ToolName(firstToolCall.Function.Name),
 			message.ToolArgumentValues(firstToolCall.Function.Arguments),
@@ -226,11 +244,11 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	}
 
 	// Return the text content
-	return message.NewChatMessage(message.MessageTypeAssistant, allContent.String()), nil
+	return message.NewChatMessage(message.MessageTypeAssistant, result.Content), nil
 }
 
-// ChatWithThinking sends a message to Ollama with thinking control
-func (c *OllamaClient) ChatWithThinking(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+// chatWithOptions is a private helper that consolidates chat logic
+func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.Message, enableThinking *bool) (message.Message, error) {
 	// Convert to Ollama format
 	ollamaMessages := ToOllamaMessages(messages)
 
@@ -238,15 +256,20 @@ func (c *OllamaClient) ChatWithThinking(ctx context.Context, messages []message.
 		Model:    c.model,
 		Messages: ollamaMessages,
 		Options: map[string]any{
-			"temperature": 0.1,
+			"temperature": temperature,
 			"num_predict": c.maxTokens, // Max output tokens for Ollama
 		},
 	}
 
 	// Set thinking parameter if supported
 	if IsThinkingCapableModel(c.model) {
-		chatRequest.Think = &enableThinking
-	} else {
+		if enableThinking != nil {
+			// Use provided thinking setting (from ChatWithThinking)
+			chatRequest.Think = enableThinking
+		} else {
+			// Use settings-based thinking control (from Chat)
+			chatRequest.Think = &c.thinking
+		}
 	}
 
 	// Add tools if this is a tool-capable model and tool manager is available
@@ -266,183 +289,49 @@ func (c *OllamaClient) ChatWithThinking(ctx context.Context, messages []message.
 		}
 	}
 
-	var allContent strings.Builder
-	var allToolCalls []api.ToolCall
-	var thinkingContent strings.Builder
-
-	// Create a channel to signal when we should stop streaming
-	done := make(chan struct{})
-
-	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
-		// Check if we should stop streaming
-		select {
-		case <-done:
-			// Streaming cancelled - first tool call received
-			return fmt.Errorf("streaming cancelled")
-		default:
-		}
-
-		allContent.WriteString(resp.Message.Content)
-		allToolCalls = append(allToolCalls, resp.Message.ToolCalls...)
-		thinkingContent.WriteString(resp.Message.Thinking)
-
-		// Streaming response with thinking received
-
-		// If we got a tool call, signal to stop streaming
-		if len(resp.Message.ToolCalls) > 0 {
-			close(done)
-		}
-
-		return nil
-	})
-
-	if err != nil && !strings.Contains(err.Error(), "streaming cancelled") {
+	result, err := c.chat(ctx, chatRequest)
+	if err != nil {
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
 
-	// Debug: Log approximate token usage for Ollama (estimation based on content length)
-	contentLength := allContent.Len()
-	thinkingLength := thinkingContent.Len()
-	estimatedInputTokens := 0
-	for _, msg := range ollamaMessages {
-		estimatedInputTokens += len(strings.Fields(msg.Content)) // Rough word count approximation
-	}
-	estimatedOutputTokens := len(strings.Fields(allContent.String())) + len(strings.Fields(thinkingContent.String())) // Include thinking tokens
-	maxTokens := 8192                                                                                                 // From num_predict option
-	utilizationPct := float64(estimatedOutputTokens) / float64(maxTokens) * 100
-
-	fmt.Printf("DEBUG: Ollama API Usage (Thinking) - Input: ~%d tokens, Output: ~%d tokens, Content: %d chars, Thinking: %d chars, Model: %s\n",
-		estimatedInputTokens, estimatedOutputTokens, contentLength, thinkingLength, c.model)
-	fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (~%d/%d)\n",
-		utilizationPct, estimatedOutputTokens, maxTokens)
-
-	// Warn if we're approaching the limit
-	if utilizationPct > 90 {
-		fmt.Printf("⚠️  WARNING: Very high token usage (%.1f%%) - potential truncation risk!\n", utilizationPct)
-	} else if utilizationPct > 80 {
-		fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
-	}
-
 	// If we have tool calls, return the first one
-	if len(allToolCalls) > 0 {
-		firstToolCall := allToolCalls[0]
+	if len(result.ToolCalls) > 0 {
+		firstToolCall := result.ToolCalls[0]
 		return message.NewToolCallMessage(
 			message.ToolName(firstToolCall.Function.Name),
 			message.ToolArgumentValues(firstToolCall.Function.Arguments),
 		), nil
 	}
 
-	// Return the text content with thinking if available
-	if thinkingContent.Len() > 0 {
-		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, allContent.String(), thinkingContent.String()), nil
+	// Return the text content with thinking if available and enabled
+	if len(result.Thinking) > 0 {
+		// For ChatWithThinking, use the explicit enableThinking parameter
+		if enableThinking != nil {
+			if *enableThinking {
+				return message.NewChatMessageWithThinking(
+					message.MessageTypeAssistant,
+					result.Content,
+					result.Thinking,
+				), nil
+			}
+		} else {
+			// For Chat, use the settings-based thinking control
+			if c.thinking {
+				return message.NewChatMessageWithThinking(
+					message.MessageTypeAssistant,
+					result.Content,
+					result.Thinking,
+				), nil
+			}
+		}
+		// If thinking is disabled, fall through to return content only
 	}
 
 	// Return the text content
-	return message.NewChatMessage(message.MessageTypeAssistant, allContent.String()), nil
+	return message.NewChatMessage(message.MessageTypeAssistant, result.Content), nil
 }
 
-// Chat sends a message to Ollama and returns the response
-func (c *OllamaClient) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
-	// Convert to Ollama format
-	ollamaMessages := ToOllamaMessages(messages)
-
-	chatRequest := &api.ChatRequest{
-		Model:    c.model,
-		Messages: ollamaMessages,
-		Options: map[string]any{
-			"temperature": 0.1,
-			"num_predict": c.maxTokens, // Max output tokens for Ollama
-		},
-	}
-
-	// Add tools if this is a tool-capable model and tool manager is available
-	if c.IsToolCapable() && c.toolManager != nil {
-		tools := convertToOllamaTools(c.toolManager.GetTools())
-		if len(tools) > 0 {
-			chatRequest.Tools = tools
-
-			// Add a system message to encourage tool usage (similar to LangChain's approach)
-			if len(ollamaMessages) > 0 && ollamaMessages[0].Role != "system" {
-				systemMessage := api.Message{
-					Role:    "system",
-					Content: "You are a helpful assistant. When the user asks you to perform tasks, you should use the available tools to help them. Always use the appropriate tool when one is available for the task at hand.",
-				}
-				ollamaMessages = append([]api.Message{systemMessage}, ollamaMessages...)
-			}
-		}
-	}
-
-	var allContent strings.Builder
-	var allToolCalls []api.ToolCall
-
-	// Create a channel to signal when we should stop streaming
-	done := make(chan struct{})
-
-	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
-		// Check if we should stop streaming
-		select {
-		case <-done:
-			// Streaming cancelled - first tool call received
-			return fmt.Errorf("streaming cancelled")
-		default:
-		}
-
-		allContent.WriteString(resp.Message.Content)
-
-		// Accumulate tool calls from all streaming chunks
-		if len(resp.Message.ToolCalls) > 0 {
-			allToolCalls = append(allToolCalls, resp.Message.ToolCalls...)
-
-			// Signal to stop streaming on first tool call
-			close(done)
-			return fmt.Errorf("first tool call received, stopping stream")
-		}
-
-		// Streaming response received
-		return nil
-	})
-
-	if err != nil {
-		// Check if this is our intentional cancellation due to tool call
-		if strings.Contains(err.Error(), "first tool call received") || strings.Contains(err.Error(), "streaming cancelled") {
-		} else {
-			return nil, fmt.Errorf("ollama chat error: %w", err)
-		}
-	}
-
-	// Debug: Log approximate token usage for Ollama (estimation based on content length)
-	contentLength := allContent.Len()
-	estimatedInputTokens := 0
-	for _, msg := range ollamaMessages {
-		estimatedInputTokens += len(strings.Fields(msg.Content)) // Rough word count approximation
-	}
-	estimatedOutputTokens := len(strings.Fields(allContent.String())) // Rough word count approximation
-	maxTokens := 8192                                                 // From num_predict option
-	utilizationPct := float64(estimatedOutputTokens) / float64(maxTokens) * 100
-
-	fmt.Printf("DEBUG: Ollama API Usage - Input: ~%d tokens, Output: ~%d tokens, Content Length: %d chars, Model: %s\n",
-		estimatedInputTokens, estimatedOutputTokens, contentLength, c.model)
-	fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (~%d/%d)\n",
-		utilizationPct, estimatedOutputTokens, maxTokens)
-
-	// Warn if we're approaching the limit
-	if utilizationPct > 90 {
-		fmt.Printf("⚠️  WARNING: Very high token usage (%.1f%%) - potential truncation risk!\n", utilizationPct)
-	} else if utilizationPct > 80 {
-		fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
-	}
-
-	// If we have accumulated tool calls, return them, otherwise return the content
-	if len(allToolCalls) > 0 {
-		// Create a synthetic message with accumulated tool calls
-		syntheticMessage := api.Message{
-			Role:      "assistant",
-			Content:   allContent.String(),
-			ToolCalls: allToolCalls,
-		}
-		return fromOllamaMessage(syntheticMessage), nil
-	} else {
-		// Return the accumulated content as a regular message
-		return message.NewChatMessage(message.MessageTypeAssistant, allContent.String()), nil
-	}
+// Chat sends a message to Ollama with thinking control
+func (c *OllamaClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+	return c.chatWithOptions(ctx, messages, &enableThinking)
 }

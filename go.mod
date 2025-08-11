@@ -10,6 +10,7 @@ require (
 	github.com/mark3labs/mcp-go v0.34.0
 	github.com/ollama/ollama v0.9.6
 	github.com/openai/openai-go v1.12.0
+	github.com/pkg/errors v0.9.1
 	google.golang.org/genai v1.19.0
 	gopkg.in/yaml.v3 v3.0.1
 )

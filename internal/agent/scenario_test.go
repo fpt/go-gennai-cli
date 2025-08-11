@@ -44,7 +44,7 @@ func TestActionSelectionResponse_JSONSerialization(t *testing.T) {
 // mockLLM is a simple mock for testing
 type mockLLM struct{}
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
 
@@ -69,7 +69,7 @@ func TestScenarioBasedToolSelection(t *testing.T) {
 
 	// Create universal tool manager components
 	todoManager := tool.NewTodoToolManager(workingDir)
-	fsConfig := infra.DevelopmentFileSystemConfig(workingDir)
+	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
 	bashConfig := tool.BashConfig{WorkingDir: workingDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)
@@ -166,7 +166,7 @@ func TestCompositeToolManager(t *testing.T) {
 	// Create individual tool managers with safe subdirectory
 	testWorkDir := "/tmp/gennai-composite-test"
 	todoManager := tool.NewTodoToolManager(testWorkDir)
-	fsConfig := infra.DefaultFileSystemConfig()
+	fsConfig := infra.DefaultFileSystemConfig(".")
 	fsManager := tool.NewFileSystemToolManager(fsConfig, testWorkDir)
 	bashConfig := tool.BashConfig{WorkingDir: testWorkDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)

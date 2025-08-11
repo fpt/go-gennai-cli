@@ -75,7 +75,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	// Create individual managers for universal tool manager
 	todoToolManager := tool.NewTodoToolManager(workingDir)
 
-	fsConfig := infra.DevelopmentFileSystemConfig(workingDir)
+	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
 
 	bashConfig := tool.BashConfig{

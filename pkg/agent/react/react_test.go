@@ -22,7 +22,7 @@ type mockLLM struct {
 	toolManager            domain.ToolManager // Store the tool manager
 }
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, messages)
 	}
@@ -51,7 +51,7 @@ func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Mes
 		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
 	}
 	// Fall back to regular chat for mock
-	return m.Chat(ctx, messages)
+	return m.Chat(ctx, messages, false)
 }
 
 // Mock ToolManager

@@ -3,6 +3,6 @@
   "llm": {
     "backend": "gemini",
     "model": "gemini-2.5-flash",
-    "maxTokens": 12000
+    "maxTokens": 2048
   }
 }

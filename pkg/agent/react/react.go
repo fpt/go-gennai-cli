@@ -86,13 +86,7 @@ func (r *ReAct) GetConversationSummary() string {
 
 // chatWithThinkingIfSupported uses thinking if the LLM client supports it
 func (r *ReAct) chatWithThinkingIfSupported(ctx context.Context, messages []message.Message) (message.Message, error) {
-	// Check if the client supports thinking using type assertion
-	if thinkingClient, ok := r.llmClient.(domain.ThinkingLLM); ok {
-		return thinkingClient.ChatWithThinking(ctx, messages, true)
-	}
-
-	// Fallback to regular chat
-	return r.llmClient.Chat(ctx, messages)
+	return r.llmClient.Chat(ctx, messages, true)
 }
 
 // chatWithToolChoice uses tool choice control if the LLM client supports it
@@ -141,13 +135,10 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 		}
 		messages := r.state.GetMessages()
 
-		// Show waiting indicator
-		fmt.Print("⌛️ Thinking...")
-
 		// Use tool calling if available, otherwise fall back to thinking/regular chat
 		var resp message.Message
 		var err error
-		
+
 		// Check if we have tools available and should use tool calling
 		if r.toolManager != nil && len(r.toolManager.GetTools()) > 0 {
 			// Use tool choice auto to let the LLM decide when to use tools
@@ -156,7 +147,7 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 			// Fall back to thinking if supported, otherwise regular chat
 			resp, err = r.chatWithThinkingIfSupported(ctx, messages)
 		}
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to get response from LLM client: %w", err)
 		}
@@ -261,7 +252,7 @@ func (r *ReAct) printMinifiedResponse(resp message.Message, iteration int) {
 	}
 }
 
-// printTruncatedToolResult shows the last 5 lines of tool output
+// printTruncatedToolResult shows tool output with truncation for success, full output for errors
 func (r *ReAct) printTruncatedToolResult(msg message.Message) {
 	content := msg.Content()
 	if content == "" {
@@ -269,22 +260,34 @@ func (r *ReAct) printTruncatedToolResult(msg message.Message) {
 		return
 	}
 
-	lines := strings.Split(content, "\n")
+	// Check if this is an error message - show full error messages
+	isError := strings.HasPrefix(content, "Error:")
 
-	// Show last 5 lines maximum
-	maxLines := 5
-	startLine := 0
-	if len(lines) > maxLines {
-		startLine = len(lines) - maxLines
-		fmt.Printf("   ↳ ...(%d more lines)\n", startLine)
-	}
-
-	for i := startLine; i < len(lines); i++ {
-		line := lines[i]
-		if len(line) > 80 {
-			line = line[:77] + "..."
+	if isError {
+		// Show full error messages without truncation
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			fmt.Printf("   ↳ %s\n", line)
 		}
-		fmt.Printf("   ↳ %s\n", line)
+	} else {
+		// Apply truncation for successful results (original behavior)
+		lines := strings.Split(content, "\n")
+
+		// Show last 5 lines maximum
+		maxLines := 5
+		startLine := 0
+		if len(lines) > maxLines {
+			startLine = len(lines) - maxLines
+			fmt.Printf("   ↳ ...(%d more lines)\n", startLine)
+		}
+
+		for i := startLine; i < len(lines); i++ {
+			line := lines[i]
+			if len(line) > 80 {
+				line = line[:77] + "..."
+			}
+			fmt.Printf("   ↳ %s\n", line)
+		}
 	}
 }
 

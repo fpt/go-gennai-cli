@@ -111,15 +111,14 @@ func TestIsToolCapable(t *testing.T) {
 		model: "gpt-4o", // This model supports tool calling
 	}
 	client := NewOpenAIClientFromCore(core)
-	
+
 	// Cast back to concrete type to access IsToolCapable method
 	concreteClient, ok := client.(*OpenAIClient)
 	if !ok {
 		t.Fatal("Expected *OpenAIClient type")
 	}
-	
+
 	if !concreteClient.IsToolCapable() {
 		t.Error("Expected gpt-4o to support tool calling")
 	}
 }
-

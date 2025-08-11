@@ -4,19 +4,25 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/pkg/message"
+	"github.com/pkg/errors"
 )
 
 func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
-	// Create a temporary directory for testing
+	// Create separate directories for proper isolation testing
 	tempDir := t.TempDir()
 	allowedSubDir := filepath.Join(tempDir, "allowed")
-	forbiddenDir := filepath.Join(tempDir, "forbidden")
+	workingDir := allowedSubDir // Set working directory to the allowed directory
+
+	// Create a forbidden directory OUTSIDE the allowed/working directory
+	tempParent := filepath.Dir(tempDir)
+	forbiddenDir := filepath.Join(tempParent, "forbidden_external")
 
 	if err := os.MkdirAll(allowedSubDir, 0755); err != nil {
 		t.Fatalf("Failed to create test directories: %v", err)
@@ -41,12 +47,13 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 	}
 
 	// Create filesystem tool manager with restricted access
+	// Note: working directory (allowedSubDir) will be automatically included in allowed directories
 	config := repository.FileSystemConfig{
-		AllowedDirectories: []string{allowedSubDir},
+		AllowedDirectories: []string{}, // Empty - only working directory should be allowed
 		BlacklistedFiles:   []string{"*.env", "*secret*"},
 	}
 
-	manager := NewFileSystemToolManager(config, tempDir)
+	manager := NewFileSystemToolManager(config, workingDir)
 	ctx := context.Background()
 
 	t.Run("AllowedDirectoryAccess", func(t *testing.T) {
@@ -76,7 +83,8 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 		if result.Error == "" {
 			t.Error("Expected access denied error for forbidden directory")
 		}
-		if !strings.Contains(result.Error, "not within allowed directories") {
+		// Can be blocked at either path resolution or directory allowlist level
+		if !strings.Contains(result.Error, "outside working directory") && !strings.Contains(result.Error, "not within allowed directories") {
 			t.Errorf("Expected directory access error, got: %s", result.Error)
 		}
 	})
@@ -98,35 +106,51 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 	})
 
 	t.Run("ReadWriteSemantics", func(t *testing.T) {
-		writeFile := filepath.Join(allowedSubDir, "write_test.txt")
+		// Test 1: Writing a new file should succeed without prior read
+		newFile := filepath.Join(allowedSubDir, "new_file.txt")
 
-		// Attempt to write without reading first - should fail
 		result, err := manager.handleWriteFile(ctx, map[string]any{
-			"path":    writeFile,
-			"content": "new content",
+			"path":    newFile,
+			"content": "new file content",
+		})
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if result.Error != "" {
+			t.Errorf("Expected success writing new file, got error: %s", result.Error)
+		}
+
+		// Test 2: Writing to existing file without prior read should fail
+		existingFile := filepath.Join(allowedSubDir, "existing_file.txt")
+		if err := os.WriteFile(existingFile, []byte("original content"), 0644); err != nil {
+			t.Fatalf("Failed to create existing file: %v", err)
+		}
+
+		result, err = manager.handleWriteFile(ctx, map[string]any{
+			"path":    existingFile,
+			"content": "modified content",
 		})
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
 		if result.Error == "" {
-			t.Error("Expected read-write semantics violation")
+			t.Error("Expected read-write semantics violation for existing file")
 		}
 		if !strings.Contains(result.Error, "was not read before write") {
 			t.Errorf("Expected read-write semantics error, got: %s", result.Error)
 		}
 
-		// Read the file first
+		// Test 3: Read existing file first, then write should succeed
 		_, err = manager.handleReadFile(ctx, map[string]any{
-			"path": writeFile,
+			"path": existingFile,
 		})
 		if err != nil {
 			t.Errorf("Unexpected error reading for write semantics: %v", err)
 		}
 
-		// Now write should succeed
 		result, err = manager.handleWriteFile(ctx, map[string]any{
-			"path":    writeFile,
-			"content": "new content",
+			"path":    existingFile,
+			"content": "modified content after read",
 		})
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
@@ -279,4 +303,206 @@ func TestFileSystemToolManager_ResolvePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureWorkingDirectoryInAllowedList(t *testing.T) {
+	tests := []struct {
+		name                  string
+		configuredDirectories []string
+		absWorkingDir         string
+		expected              []string
+		description           string
+	}{
+		{
+			name:                  "empty_configured_directories",
+			configuredDirectories: []string{},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/tmp/working"},
+			description:           "Should add working directory when configured directories is empty",
+		},
+		{
+			name:                  "nil_configured_directories",
+			configuredDirectories: nil,
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/tmp/working"},
+			description:           "Should add working directory when configured directories is nil",
+		},
+		{
+			name:                  "working_dir_already_present_exact_match",
+			configuredDirectories: []string{"/tmp/working", "/other/path"},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/tmp/working", "/other/path"},
+			description:           "Should not duplicate working directory when already present (exact match)",
+		},
+		{
+			name:                  "working_dir_not_present",
+			configuredDirectories: []string{"/some/path", "/another/path"},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/some/path", "/another/path", "/tmp/working"},
+			description:           "Should add working directory when not present in configured directories",
+		},
+		{
+			name:                  "working_dir_present_as_relative_path",
+			configuredDirectories: []string{"./working", "/other/path"},
+			absWorkingDir:         getCurrentDir() + "/working",
+			expected:              []string{"./working", "/other/path"},
+			description:           "Should not duplicate when working directory present as relative path",
+		},
+		{
+			name:                  "configured_dirs_with_invalid_paths",
+			configuredDirectories: []string{"", "/valid/path", "/tmp/working"},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"", "/valid/path", "/tmp/working"},
+			description:           "Should handle invalid paths gracefully and not duplicate valid working dir",
+		},
+		{
+			name:                  "multiple_similar_paths",
+			configuredDirectories: []string{"/tmp/work", "/tmp/working-other", "/other/path"},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/tmp/work", "/tmp/working-other", "/other/path", "/tmp/working"},
+			description:           "Should add working directory even when similar paths exist",
+		},
+		{
+			name:                  "preserve_original_order",
+			configuredDirectories: []string{"/z/path", "/a/path", "/m/path"},
+			absWorkingDir:         "/tmp/working",
+			expected:              []string{"/z/path", "/a/path", "/m/path", "/tmp/working"},
+			description:           "Should preserve the original order of configured directories",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ensureWorkingDirectoryInAllowedList(tt.configuredDirectories, tt.absWorkingDir)
+
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("ensureWorkingDirectoryInAllowedList() = %v, want %v\nDescription: %s",
+					result, tt.expected, tt.description)
+			}
+
+			// Verify that the original slice was not modified
+			if tt.configuredDirectories != nil {
+				// Create a copy to compare against
+				originalCopy := make([]string, len(tt.configuredDirectories))
+				copy(originalCopy, tt.configuredDirectories)
+				if !reflect.DeepEqual(tt.configuredDirectories, originalCopy) {
+					t.Errorf("Original configured directories slice was modified. This should not happen.")
+				}
+			}
+		})
+	}
+}
+
+func TestEnsureWorkingDirectoryInAllowedList_EdgeCases(t *testing.T) {
+	t.Run("working_dir_is_empty", func(t *testing.T) {
+		result := ensureWorkingDirectoryInAllowedList([]string{"/some/path"}, "")
+		expected := []string{"/some/path", ""}
+
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("ensureWorkingDirectoryInAllowedList() with empty working dir = %v, want %v", result, expected)
+		}
+	})
+
+	t.Run("case_sensitivity", func(t *testing.T) {
+		// On case-sensitive filesystems, these should be treated as different
+		result := ensureWorkingDirectoryInAllowedList([]string{"/TMP/WORKING"}, "/tmp/working")
+
+		// Should add the working directory because case matters on most Unix systems
+		if len(result) != 2 {
+			t.Errorf("ensureWorkingDirectoryInAllowedList() should treat case-sensitive paths as different")
+		}
+	})
+
+	t.Run("working_dir_with_trailing_slash", func(t *testing.T) {
+		// Test that trailing slashes don't affect matching
+		configuredDirs := []string{"/tmp/working/"}
+		workingDir := "/tmp/working"
+
+		result := ensureWorkingDirectoryInAllowedList(configuredDirs, workingDir)
+
+		// Should not duplicate because filepath.Abs should normalize paths
+		if len(result) != 1 {
+			t.Errorf("ensureWorkingDirectoryInAllowedList() should handle trailing slashes correctly, got %d items: %v", len(result), result)
+		}
+	})
+}
+
+func TestEnsureWorkingDirectoryInAllowedList_InputImmutability(t *testing.T) {
+	t.Run("original_slice_not_modified", func(t *testing.T) {
+		originalDirs := []string{"/path1", "/path2"}
+		originalCopy := make([]string, len(originalDirs))
+		copy(originalCopy, originalDirs)
+
+		workingDir := "/tmp/working"
+
+		result := ensureWorkingDirectoryInAllowedList(originalDirs, workingDir)
+
+		// Verify original slice is unchanged
+		if !reflect.DeepEqual(originalDirs, originalCopy) {
+			t.Errorf("Original input slice was modified: got %v, want %v", originalDirs, originalCopy)
+		}
+
+		// Verify result has the working directory added
+		expected := []string{"/path1", "/path2", "/tmp/working"}
+		if !reflect.DeepEqual(result, expected) {
+			t.Errorf("Result incorrect: got %v, want %v", result, expected)
+		}
+
+		// Verify modifying the result doesn't affect the original
+		result[0] = "/modified"
+		if originalDirs[0] == "/modified" {
+			t.Errorf("Modifying result affected original slice")
+		}
+	})
+}
+
+// getCurrentDir returns the current working directory for testing relative paths
+func getCurrentDir() string {
+	dir, err := filepath.Abs(".")
+	if err != nil {
+		return "." // Fallback for tests
+	}
+	return dir
+}
+
+func TestFileSystemToolManager_IsPathAllowed(t *testing.T) {
+	tempDir := t.TempDir()
+	allowedDir := filepath.Join(tempDir, "allowed")
+	forbiddenDir := filepath.Join(tempDir, "forbidden")
+
+	if err := os.MkdirAll(allowedDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directories: %v", err)
+	}
+	if err := os.MkdirAll(forbiddenDir, 0755); err != nil {
+		t.Fatalf("Failed to create test directories: %v", err)
+	}
+
+	// Create manager with specific allowed directories
+	config := repository.FileSystemConfig{
+		AllowedDirectories: []string{allowedDir},
+		BlacklistedFiles:   []string{},
+	}
+	// Use a different working directory to test the allowlist logic specifically
+	manager := NewFileSystemToolManager(config, allowedDir)
+
+	t.Run("allowed_path_should_pass", func(t *testing.T) {
+		allowedFile := filepath.Join(allowedDir, "test.txt")
+		err := manager.isPathAllowed(allowedFile)
+		if err != nil {
+			t.Errorf("Expected allowed path to pass, got error: %v", err)
+		}
+	})
+
+	t.Run("forbidden_path_should_return_errNotInAllowedDirectory", func(t *testing.T) {
+		forbiddenFile := filepath.Join(forbiddenDir, "test.txt")
+		err := manager.isPathAllowed(forbiddenFile)
+
+		if err == nil {
+			t.Error("Expected error for forbidden path")
+		}
+
+		if !errors.Is(err, errNotInAllowedDirectory) {
+			t.Errorf("Expected errNotInAllowedDirectory, got: %v", err)
+		}
+	})
 }

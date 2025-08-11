@@ -3,6 +3,7 @@
   "llm": {
     "backend": "ollama",
     "model": "gpt-oss:latest",
-    "maxTokens": 12000
+    "thinking": true,
+    "maxTokens": 2048
   }
 }

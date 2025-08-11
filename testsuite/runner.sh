@@ -96,18 +96,22 @@ echo ""
 output_file=$(mktemp)
 error_file=$(mktemp)
 
-# Use the testcase directory as the working directory
-test_work_dir="$testcase_dir"
+# Create a temporary directory for the test to run in isolation
+temp_test_dir=$(mktemp -d)
+echo -e "${YELLOW}🗂️  Created temporary test directory: $temp_test_dir${NC}"
+
+# Copy all test files from the testcase directory to the temp directory
+echo -e "${YELLOW}📋 Copying test files to temporary directory...${NC}"
+cp -r "$testcase_dir/"* "$temp_test_dir/"
+
+# Use the temporary directory as the working directory (complete isolation)
+test_work_dir="$temp_test_dir"
 echo "Test working directory: $test_work_dir"
 
-# Clean up any non-git managed files and directories in the testcase directory
-(cd "$test_work_dir" && git clean -fd) 2>/dev/null || true
+# Note: No need for git clean since we're in a fresh temp directory
 
-# Reset any modified tracked files to their committed state
-(cd "$test_work_dir" && git checkout -- .) 2>/dev/null || true
-
-# Run the test in the testcase directory using absolute paths
-prompt_file="$testcase_dir/prompt.txt"
+# Run the test in the temporary directory using the copied files
+prompt_file="$temp_test_dir/prompt.txt"
 echo -e "${CYAN}Running: $CLI --workdir $test_work_dir --settings $backend_file -f $prompt_file${NC}"
 if "$CLI" --workdir "$test_work_dir" --settings "$backend_file" -f "$prompt_file" > "$output_file" 2> "$error_file"; then
     exit_code=0
@@ -122,14 +126,15 @@ cat "$output_file"
 echo "----------------------------------------"
 
 if [ $exit_code -eq 0 ]; then
-    # Run the check script from the test working directory
+    # Run the check script from the test working directory (use copied check.sh)
     echo -e "${YELLOW}🔍 Running validation check in: $test_work_dir${NC}"
     
-    if (cd "$test_work_dir" && "$testcase_dir/check.sh" "$output_file" "$error_file"); then
+    if (cd "$test_work_dir" && "$temp_test_dir/check.sh" "$output_file" "$error_file"); then
         echo ""
         echo -e "${GREEN}✅ PASS: $testcase_name × $backend_name${NC}"
-        # Clean up test artifacts using git clean (removes non-git managed files and directories)
-        (cd "$test_work_dir" && git clean -fd) 2>/dev/null || true
+        # Clean up temporary directory and files
+        echo -e "${YELLOW}🧹 Cleaning up temporary directory: $temp_test_dir${NC}"
+        rm -rf "$temp_test_dir"
         rm -f "$output_file" "$error_file"
         exit 0
     else
@@ -139,7 +144,9 @@ if [ $exit_code -eq 0 ]; then
         cat "$error_file"
         echo -e "${YELLOW}Test directory contents:${NC}"
         ls -la "$test_work_dir"
-        # Clean up temporary files but leave test artifacts for debugging
+        echo -e "${YELLOW}💾 Temporary directory preserved for debugging: $temp_test_dir${NC}"
+        echo -e "${YELLOW}    (Will be cleaned up automatically on next test run)${NC}"
+        # Clean up temporary files but preserve temp directory for debugging
         rm -f "$output_file" "$error_file"
         exit 1
     fi
@@ -147,7 +154,9 @@ else
     echo -e "${RED}❌ FAIL: $testcase_name × $backend_name (gennai execution failed, exit code: $exit_code)${NC}"
     echo -e "${YELLOW}Error output:${NC}"
     cat "$error_file"
-    # Clean up temporary files but leave test artifacts for debugging
+    echo -e "${YELLOW}💾 Temporary directory preserved for debugging: $temp_test_dir${NC}"
+    echo -e "${YELLOW}    (Will be cleaned up automatically on next test run)${NC}"
+    # Clean up temporary files but preserve temp directory for debugging
     rm -f "$output_file" "$error_file"
     exit 1
 fi

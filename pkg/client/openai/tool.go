@@ -21,7 +21,7 @@ func convertToolsToOpenAI(tools map[message.ToolName]message.Tool) []openai.Chat
 		var required []string
 
 		for _, arg := range tool.Arguments() {
-			// Convert tool argument to OpenAI property schema  
+			// Convert tool argument to OpenAI property schema
 			property := convertArgumentToProperty(arg)
 			properties[string(arg.Name)] = property
 
@@ -40,7 +40,7 @@ func convertToolsToOpenAI(tools map[message.ToolName]message.Tool) []openai.Chat
 			"type":       "object",
 			"properties": properties,
 		}
-		
+
 		// Only add required if we have required fields
 		if len(required) > 0 {
 			params["required"] = required
@@ -62,27 +62,37 @@ func convertToolsToOpenAI(tools map[message.ToolName]message.Tool) []openai.Chat
 	return openaiTools
 }
 
-// convertToolChoiceToOpenAI converts domain ToolChoice to OpenAI format
-func convertToolChoiceToOpenAI(toolChoice domain.ToolChoice) *string {
+// convertToolChoiceToOpenAI converts domain ToolChoice to OpenAI ChatCompletionToolChoiceOptionUnionParam
+func convertToolChoiceToOpenAI(toolChoice domain.ToolChoice) *openai.ChatCompletionToolChoiceOptionUnionParam {
 	switch toolChoice.Type {
 	case domain.ToolChoiceAuto:
-		autoChoice := "auto"
-		return &autoChoice
+		param := openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+		}
+		return &param
 	case domain.ToolChoiceAny:
-		requiredChoice := "required"
-		return &requiredChoice
+		param := openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+		}
+		return &param
 	case domain.ToolChoiceTool:
-		// For specific tool choice, we'll use auto for now
-		// TODO: Implement specific tool selection
-		autoChoice := "auto"
-		return &autoChoice
+		// Create a specific tool choice using ChatCompletionNamedToolChoice
+		functionParam := openai.ChatCompletionNamedToolChoiceFunctionParam{
+			Name: string(toolChoice.Name),
+		}
+		namedChoice := openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(functionParam)
+		return &namedChoice
 	case domain.ToolChoiceNone:
-		noneChoice := "none"
-		return &noneChoice
+		param := openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
+		}
+		return &param
 	default:
 		// Default to auto
-		autoChoice := "auto"
-		return &autoChoice
+		param := openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
+		}
+		return &param
 	}
 }
 
@@ -101,7 +111,10 @@ func toOpenAIMessages(messages []message.Message) []openai.ChatCompletionMessage
 		case message.MessageTypeToolCall:
 			// For conversation history, represent tool calls as assistant messages
 			// The actual tool calling happens via the OpenAI native API
-			if toolCallMsg, ok := msg.(interface{ ToolName() message.ToolName; ToolArguments() message.ToolArgumentValues }); ok {
+			if toolCallMsg, ok := msg.(interface {
+				ToolName() message.ToolName
+				ToolArguments() message.ToolArgumentValues
+			}); ok {
 				argsJSON := convertToolArgsToJSON(toolCallMsg.ToolArguments())
 				toolCallText := "[Called tool: " + string(toolCallMsg.ToolName()) + "(" + argsJSON + ")]"
 				openaiMessages = append(openaiMessages, openai.AssistantMessage(toolCallText))
@@ -127,8 +140,8 @@ func convertArgumentToProperty(arg message.ToolArgument) map[string]interface{} 
 	}
 
 	desc := arg.Description.String()
-	
-	// Extract enum values if present in description  
+
+	// Extract enum values if present in description
 	if enumValues := extractEnumFromDescription(desc); len(enumValues) > 0 {
 		property["enum"] = enumValues
 	}
@@ -138,7 +151,7 @@ func convertArgumentToProperty(arg message.ToolArgument) map[string]interface{} 
 		if itemSchema := inferArrayItemSchema(desc); itemSchema != nil {
 			property["items"] = itemSchema
 		}
-		
+
 		// Extract array constraints like maxItems
 		if maxItems := extractMaxItems(desc); maxItems > 0 {
 			property["maxItems"] = maxItems
@@ -160,28 +173,28 @@ func convertArgumentToProperty(arg message.ToolArgument) map[string]interface{} 
 func inferArrayItemSchema(desc string) map[string]interface{} {
 	// Look for common patterns in descriptions
 	lowerDesc := strings.ToLower(desc)
-	
+
 	// Generic object with properties mentioned in description
 	if strings.Contains(lowerDesc, "object") && strings.Contains(lowerDesc, "properties") {
 		return map[string]interface{}{
 			"type": "object",
 		}
 	}
-	
+
 	// String array
 	if strings.Contains(lowerDesc, "string") || strings.Contains(lowerDesc, "text") {
 		return map[string]interface{}{
 			"type": "string",
 		}
 	}
-	
-	// Number array  
+
+	// Number array
 	if strings.Contains(lowerDesc, "number") || strings.Contains(lowerDesc, "numeric") {
 		return map[string]interface{}{
 			"type": "number",
 		}
 	}
-	
+
 	// Default to object for complex arrays
 	return map[string]interface{}{
 		"type": "object",
@@ -190,7 +203,7 @@ func inferArrayItemSchema(desc string) map[string]interface{} {
 
 // extractMaxItems extracts maxItems constraint from description
 func extractMaxItems(desc string) int {
-	// Look for patterns like "maxItems: 5" or "5 items or fewer" 
+	// Look for patterns like "maxItems: 5" or "5 items or fewer"
 	if strings.Contains(desc, "maxItems:") {
 		if idx := strings.Index(desc, "maxItems:"); idx >= 0 {
 			remaining := desc[idx+9:] // Skip "maxItems:"
@@ -199,7 +212,7 @@ func extractMaxItems(desc string) int {
 			}
 		}
 	}
-	
+
 	// Look for "X items or fewer" pattern
 	if strings.Contains(desc, "items or fewer") || strings.Contains(desc, "or fewer items") {
 		// Simple pattern matching for common cases
@@ -207,7 +220,7 @@ func extractMaxItems(desc string) int {
 			return 5
 		}
 	}
-	
+
 	return 0
 }
 
@@ -216,7 +229,7 @@ func extractEnumFromDescription(desc string) []string {
 	if len(desc) < 10 {
 		return nil
 	}
-	
+
 	// Look for "one of:" or "enum:" pattern
 	var enumStart int = -1
 	for i := 0; i < len(desc)-6; i++ {
@@ -229,25 +242,25 @@ func extractEnumFromDescription(desc string) []string {
 			break
 		}
 	}
-	
+
 	if enumStart == -1 {
 		return nil
 	}
-	
+
 	enumStr := desc[enumStart:]
 	if len(enumStr) == 0 {
 		return nil
 	}
-	
+
 	// Skip whitespace
 	for len(enumStr) > 0 && enumStr[0] == ' ' {
 		enumStr = enumStr[1:]
 	}
-	
+
 	if len(enumStr) == 0 {
 		return nil
 	}
-	
+
 	// Simple split by comma
 	parts := make([]string, 0)
 	current := ""
@@ -272,7 +285,7 @@ func extractEnumFromDescription(desc string) []string {
 			current += string(enumStr[i])
 		}
 	}
-	
+
 	// Add final part
 	trimmed := ""
 	for j := 0; j < len(current); j++ {
@@ -287,7 +300,7 @@ func extractEnumFromDescription(desc string) []string {
 	if len(trimmed) > 0 {
 		parts = append(parts, trimmed)
 	}
-	
+
 	if len(parts) > 1 {
 		return parts
 	}

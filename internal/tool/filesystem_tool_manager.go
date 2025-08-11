@@ -12,7 +12,10 @@ import (
 
 	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/pkg/message"
+	"github.com/pkg/errors"
 )
+
+var errNotInAllowedDirectory = errors.New("file access denied: path is not within allowed directories")
 
 // FileSystemToolManager provides secure file system operations with safety controls
 type FileSystemToolManager struct {
@@ -38,8 +41,11 @@ func NewFileSystemToolManager(config repository.FileSystemConfig, workingDir str
 		absWorkingDir = workingDir
 	}
 
+	// Ensure working directory is always in allowed directories for backward compatibility
+	allowedDirs := ensureWorkingDirectoryInAllowedList(config.AllowedDirectories, absWorkingDir)
+
 	manager := &FileSystemToolManager{
-		allowedDirectories: config.AllowedDirectories,
+		allowedDirectories: allowedDirs,
 		blacklistedFiles:   config.BlacklistedFiles,
 		workingDir:         absWorkingDir,
 		fileReadTimestamps: make(map[string]time.Time),
@@ -50,6 +56,35 @@ func NewFileSystemToolManager(config repository.FileSystemConfig, workingDir str
 	manager.registerFileSystemTools()
 
 	return manager
+}
+
+// ensureWorkingDirectoryInAllowedList ensures the working directory is always included
+// in the allowed directories list for backward compatibility.
+// It returns a new slice with the working directory included if not already present.
+func ensureWorkingDirectoryInAllowedList(configuredDirectories []string, absWorkingDir string) []string {
+	// Create a copy of the original slice to avoid modifying the input
+	allowedDirs := make([]string, len(configuredDirectories))
+	copy(allowedDirs, configuredDirectories)
+
+	// Check if working directory is already present
+	workingDirPresent := false
+	for _, dir := range allowedDirs {
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			continue // Skip invalid directories
+		}
+		if absDir == absWorkingDir {
+			workingDirPresent = true
+			break
+		}
+	}
+
+	// Add working directory if not already present
+	if !workingDirPresent {
+		allowedDirs = append(allowedDirs, absWorkingDir)
+	}
+
+	return allowedDirs
 }
 
 // Implement domain.ToolManager interface
@@ -183,12 +218,26 @@ func (m *FileSystemToolManager) registerFileSystemTools() {
 
 // Security validation methods
 
+// abs resolves a path to absolute form relative to the tool's working directory
+// This replaces filepath.Abs to avoid resolving against the process's current working directory
+func (m *FileSystemToolManager) abs(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	
+	// For relative paths, resolve against the tool's working directory
+	resolved := filepath.Join(m.workingDir, path)
+	
+	// Clean the path to handle . and .. elements
+	return filepath.Clean(resolved), nil
+}
+
 // resolvePath resolves a path relative to the working directory
 func (m *FileSystemToolManager) resolvePath(path string) (string, error) {
 	// If path is already absolute, check if it's within working directory
 	if filepath.IsAbs(path) {
-		// Convert to absolute path for consistent checking
-		absWorkingDir, err := filepath.Abs(m.workingDir)
+		// Get absolute form of working directory using our own method
+		absWorkingDir, err := m.abs(m.workingDir)
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve working directory: %v", err)
 		}
@@ -202,27 +251,20 @@ func (m *FileSystemToolManager) resolvePath(path string) (string, error) {
 		return "", fmt.Errorf("absolute path %s is outside working directory %s", path, m.workingDir)
 	}
 
-	// Resolve relative path against working directory
-	resolved := filepath.Join(m.workingDir, path)
-	return filepath.Abs(resolved)
+	// Resolve relative path against working directory using our own method
+	return m.abs(path)
 }
 
 // isPathAllowed checks if a file path is within allowed directories
 func (m *FileSystemToolManager) isPathAllowed(path string) error {
-	if len(m.allowedDirectories) == 0 {
-		// If no allowed directories specified, allow all (backwards compatibility)
-		return nil
-	}
+	// Note: allowedDirectories always contains at least the working directory (ensured in constructor)
 
-	// Convert to absolute path for consistent checking
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve absolute path: %v", err)
-	}
+	// Expect path to already be absolute (resolved by caller)
+	absPath := path
 
 	// Check if path is within any allowed directory
 	for _, allowedDir := range m.allowedDirectories {
-		allowedAbs, err := filepath.Abs(allowedDir)
+		allowedAbs, err := m.abs(allowedDir)
 		if err != nil {
 			continue // Skip invalid allowed directory
 		}
@@ -233,13 +275,13 @@ func (m *FileSystemToolManager) isPathAllowed(path string) error {
 		}
 	}
 
-	return fmt.Errorf("file access denied: path %s is not within allowed directories %v", path, m.allowedDirectories)
+	return errNotInAllowedDirectory
 }
 
 // isFileBlacklisted checks if a file is in the blacklist
 func (m *FileSystemToolManager) isFileBlacklisted(path string) error {
 	fileName := filepath.Base(path)
-	absPath, _ := filepath.Abs(path)
+	absPath := path // Expect path to already be absolute (resolved by caller)
 
 	for _, blacklisted := range m.blacklistedFiles {
 		// Check both filename and full path patterns
@@ -357,10 +399,17 @@ func (m *FileSystemToolManager) handleWriteFile(ctx context.Context, args messag
 		return message.NewToolResultError(err.Error()), nil
 	}
 
-	// Read-write semantics validation
-	if err := m.validateReadWriteSemantics(path); err != nil {
-		return message.NewToolResultError(err.Error()), nil
+	// Check if the file exists - only validate read-write semantics for existing files
+	if _, err := os.Stat(path); err == nil {
+		// File exists - validate read-write semantics
+		if err := m.validateReadWriteSemantics(path); err != nil {
+			return message.NewToolResultError(err.Error()), nil
+		}
+	} else if !os.IsNotExist(err) {
+		// Other error (permission, etc.) - report it
+		return message.NewToolResultError(fmt.Sprintf("failed to check file status: %v", err)), nil
 	}
+	// If file doesn't exist (os.IsNotExist), allow creating new file without validation
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(path)
@@ -405,10 +454,10 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 		return message.NewToolResultError("old_string and new_string cannot be identical"), nil
 	}
 
-	// Convert to absolute path for consistency
-	absPath, err := filepath.Abs(filePath)
+	// Resolve path relative to working directory
+	absPath, err := m.resolvePath(filePath)
 	if err != nil {
-		return message.NewToolResultError(fmt.Sprintf("failed to resolve absolute path: %v", err)), nil
+		return message.NewToolResultError(fmt.Sprintf("failed to resolve path: %v", err)), nil
 	}
 
 	// Security checks

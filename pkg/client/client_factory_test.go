@@ -18,7 +18,7 @@ type mockLLM struct {
 	toolManager            domain.ToolManager // Store the tool manager
 }
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, messages)
 	}
@@ -47,7 +47,7 @@ func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Mes
 		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
 	}
 	// Fall back to regular chat for mock
-	return m.Chat(ctx, messages)
+	return m.Chat(ctx, messages, false)
 }
 
 // Mock ToolManager
@@ -114,7 +114,7 @@ func TestClientWithTool_Chat(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := client.Chat(ctx, messages)
+	result, err := client.Chat(ctx, messages, false)
 
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
@@ -143,7 +143,7 @@ func TestClientWithTool_Chat_Error(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := client.Chat(ctx, messages)
+	result, err := client.Chat(ctx, messages, false)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")

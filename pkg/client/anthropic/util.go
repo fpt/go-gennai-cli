@@ -98,21 +98,21 @@ func unsanitizeToolNameFromAnthropic(sanitizedName string) string {
 			return sanitizedName
 		}
 	}
-	
-	// Handle server.tool pattern (e.g., "serverA_tree_dir" -> "serverA.tree_dir") 
+
+	// Handle server.tool pattern (e.g., "serverA_tree_dir" -> "serverA.tree_dir")
 	parts := strings.SplitN(sanitizedName, "_", 2)
 	if len(parts) == 2 {
 		serverName := parts[0]
 		// Check if this looks like an MCP server.tool pattern
 		// Only convert if it looks like a server name (contains mcp, dev, or is reasonably long)
 		// Exclude common regular tool patterns like "regular_tool"
-		if (strings.Contains(serverName, "mcp") || strings.Contains(serverName, "dev") || 
-		   strings.HasSuffix(serverName, "mcp") || len(serverName) > 6) &&
-		   !strings.Contains(serverName, "regular") && !strings.Contains(serverName, "simple") {
+		if (strings.Contains(serverName, "mcp") || strings.Contains(serverName, "dev") ||
+			strings.HasSuffix(serverName, "mcp") || len(serverName) > 6) &&
+			!strings.Contains(serverName, "regular") && !strings.Contains(serverName, "simple") {
 			return parts[0] + "." + parts[1]
 		}
 	}
-	
+
 	return sanitizedName
 }
 

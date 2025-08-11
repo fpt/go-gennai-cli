@@ -12,7 +12,7 @@ var ErrInvalidClientType = errors.New("invalid client type for tool calling")
 // LLM represents the base language model interface for basic chat functionality
 type LLM interface {
 	// Chat sends a message to the LLM and returns the response
-	Chat(ctx context.Context, messages []message.Message) (message.Message, error)
+	Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error)
 }
 
 // ToolCallingLLM extends LLM with tool calling capabilities
@@ -24,21 +24,6 @@ type ToolCallingLLM interface {
 
 	// ChatWithToolChoice sends a message to the LLM with tool choice control
 	ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice ToolChoice) (message.Message, error)
-}
-
-// ThinkingLLM extends LLM with thinking capabilities
-type ThinkingLLM interface {
-	LLM
-
-	// ChatWithThinking sends a message to the LLM with thinking control
-	ChatWithThinking(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error)
-}
-
-// ToolCallingLLMWithThinking combines tool calling with thinking capabilities
-// This provides tool calling for reasoning models that support thinking
-type ToolCallingLLMWithThinking interface {
-	ToolCallingLLM
-	ThinkingLLM
 }
 
 // VisionLLM extends LLM with vision capabilities for image analysis

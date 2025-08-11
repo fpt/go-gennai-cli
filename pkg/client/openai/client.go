@@ -76,8 +76,8 @@ func NewOpenAIClientFromCore(core *OpenAICore) domain.ToolCallingLLM {
 	}
 }
 
-// Chat implements the basic LLM interface
-func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message) (message.Message, error) {
+// Chat implements the basic LLM interface with thinking control
+func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
 	// Convert internal messages to OpenAI format
 	openaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0)
 
@@ -94,8 +94,8 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message) (me
 	}
 
 	completion, err := c.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages:             openaiMessages,
-		Model:                shared.ChatModel(c.model),
+		Messages:            openaiMessages,
+		Model:               shared.ChatModel(c.model),
 		MaxCompletionTokens: openai.Int(int64(c.maxTokens)),
 	})
 	if err != nil {
@@ -109,7 +109,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message) (me
 	// Create response message
 	response := completion.Choices[0].Message.Content
 	responseMessage := message.NewChatMessage(message.MessageTypeAssistant, response)
-	
+
 	// Set token usage from OpenAI API response
 	responseMessage.SetTokenUsage(
 		int(completion.Usage.PromptTokens),
@@ -161,8 +161,8 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 
 	// Create completion params
 	params := openai.ChatCompletionNewParams{
-		Messages:             openaiMessages,
-		Model:                shared.ChatModel(openaiModel),
+		Messages:            openaiMessages,
+		Model:               shared.ChatModel(openaiModel),
 		MaxCompletionTokens: openai.Int(int64(c.maxTokens)),
 	}
 
@@ -170,9 +170,15 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	if c.toolManager != nil {
 		domainTools := c.toolManager.GetTools()
 		tools := convertToolsToOpenAI(domainTools)
-		
+
 		if len(tools) > 0 {
 			params.Tools = tools
+			
+			// Set tool choice based on the provided configuration
+			toolChoiceParam := convertToolChoiceToOpenAI(toolChoice)
+			if toolChoiceParam != nil {
+				params.ToolChoice = *toolChoiceParam
+			}
 		}
 	}
 
@@ -186,13 +192,13 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	}
 
 	choice := completion.Choices[0]
-	
+
 	// Check if there are tool calls in the response
 	if len(choice.Message.ToolCalls) > 0 {
 		// Return the first tool call
 		toolCall := choice.Message.ToolCalls[0]
 		toolArgs := convertOpenAIArgsToToolArgs(toolCall.Function.Arguments)
-		
+
 		// Create tool call message with the specific OpenAI tool call ID for proper pairing
 		toolCallMessage := message.NewToolCallMessageWithID(
 			toolCall.ID, // Use OpenAI's tool call ID
@@ -200,14 +206,14 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 			toolArgs,
 			time.Now(),
 		)
-		
+
 		// Set token usage for tool call message
 		toolCallMessage.SetTokenUsage(
 			int(completion.Usage.PromptTokens),
 			int(completion.Usage.CompletionTokens),
 			int(completion.Usage.TotalTokens),
 		)
-		
+
 		// Optional debug logging
 		if os.Getenv("DEBUG_TOKENS") == "1" {
 			maxTokens := c.maxTokens
@@ -219,14 +225,14 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 			fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (%d/%d)\n",
 				utilizationPct, outputTokens, maxTokens)
 		}
-		
+
 		return toolCallMessage, nil
 	}
 
 	// Return regular text response
 	response := choice.Message.Content
 	responseMessage := message.NewChatMessage(message.MessageTypeAssistant, response)
-	
+
 	// Set token usage for regular response
 	responseMessage.SetTokenUsage(
 		int(completion.Usage.PromptTokens),
@@ -252,7 +258,7 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 			fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
 		}
 	}
-	
+
 	return responseMessage, nil
 }
 
@@ -261,4 +267,3 @@ func (c *OpenAIClient) SupportsVision() bool {
 	// GPT-4V models support vision
 	return strings.Contains(c.model, "gpt-4") && (strings.Contains(c.model, "vision") || strings.Contains(c.model, "gpt-4o"))
 }
-

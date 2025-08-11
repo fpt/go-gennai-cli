@@ -71,7 +71,7 @@ func (s *ScenarioConfig) GetToolScope() domain.ToolScope {
 			if mcpName == "" {
 				mcpName = strings.TrimPrefix(tool, "MCP:")
 			}
-			
+
 			if mcpName != "" {
 				scope.MCPTools = append(scope.MCPTools, mcpName)
 			}

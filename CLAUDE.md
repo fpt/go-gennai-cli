@@ -247,21 +247,12 @@ The system uses a **capability-based design** with clean interface segregation:
 **Interface Hierarchy:**
 - `domain.LLM` - Base interface for basic chat functionality
 - `domain.ToolCallingLLM` - Extends LLM with tool calling capabilities  
-- `domain.ThinkingLLM` - Extends LLM with thinking capabilities
 - `domain.StructuredLLM[T any]` - Extends LLM with type-safe structured output
-- `domain.ToolCallingLLMWithThinking` - Combines tool calling + thinking
-- `domain.StructuredLLMWithThinking[T any]` - Combines structured output + thinking
 
 **Capability Detection:**
 Capabilities are determined using Go's type assertion pattern rather than boolean methods:
 
 ```go
-// Check for thinking capability
-if thinkingClient, ok := client.(domain.ThinkingLLM); ok {
-    // Use thinking-specific methods
-    response, err := thinkingClient.ChatWithThinking(ctx, messages, true)
-}
-
 // Check for tool calling capability  
 if toolClient, ok := client.(domain.ToolCallingLLM); ok {
     // Use tool calling methods
@@ -274,6 +265,8 @@ if structuredClient, ok := client.(domain.StructuredLLM[MyType]); ok {
     result, err := structuredClient.InvokeStructuredOutput(ctx, messages)
 }
 ```
+
+NOTE: Thinking is not a capability. It's a behavior of model.
 
 **Benefits of Type Assertion Approach:**
 - **Type Safety**: Compile-time guarantees that capabilities exist
