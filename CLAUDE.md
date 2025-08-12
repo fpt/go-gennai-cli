@@ -163,25 +163,7 @@ This is a Go-based scenario-driven coding agent that uses YAML-configured scenar
 - `domain.ToolManager` - Interface for tool management with security controls
 
 **YAML-Driven Scenario System:**
-The system is fully driven by YAML configurations in `asset/scenario/`:
-
-**Available Scenarios:**
-- `CODE` - Comprehensive coding assistant for all development tasks (filesystem, default, todo, bash, mcp:godevmcp)
-- `FILESYSTEM` - File system exploration and analysis (filesystem, default, todo, mcp:godevmcp)
-- `RESEARCH` - Web research and information gathering (default, mcp:serverB)
-- `RESPOND` - Direct knowledge-based responses, todo management, and tool usage (default tools only)
-
-**Scenario Configuration Structure:**
-```yaml
-SCENARIO_NAME:
-  tools: "filesystem, default"  # or "default" only
-  description: "Brief description for planner selection"
-  prompt: |
-    Template prompt with variables:
-    User Request: {{userInput}}
-    Reason: {{scenarioReason}}
-    Working Directory: {{workingDir}}
-```
+The system uses embedded built-in scenarios with optional custom overrides. See [YAML Scenario System](#yaml-scenario-system) section for complete details.
 
 **Security-First Tool Management:**
 - **Scenario-Based Tool Isolation**: Different scenarios get different tool access
@@ -424,15 +406,9 @@ state.AddMessage(summaryMsg)
 The system uses a hybrid approach combining embedded built-in scenarios with optional custom scenarios for maximum flexibility.
 
 **Built-in Embedded Scenarios:**
-The system includes 9 built-in scenarios embedded in the binary:
-- `INVESTIGATE_FILESYSTEM` - File system exploration and analysis
-- `GENERATE` - Code and content generation, file creation, project scaffolding
-- `ANALYZE_CODE` - Code structure and architecture analysis  
-- `RESEARCH` - Web research and information gathering
-- `RESPOND` - Direct knowledge-based responses
-- `DEBUG` - Debugging and error investigation
-- `TEST` - Test creation and execution
-- `REFACTOR` - Code refactoring and improvement
+The system includes built-in scenarios embedded in the binary:
+- `CODE` - Comprehensive coding assistant for all development tasks (filesystem, default, todo, bash, mcp:godevmcp)
+- `RESPOND` - Direct knowledge-based responses, todo management, and tool usage (default tools only)
 
 **Custom Scenario Files:**
 You can override or extend built-in scenarios using the `--scenarios` flag:
@@ -633,14 +609,8 @@ go test ./pkg/client/ollama/ -v
 Run these scenarios to evaluate gennai's scenario-based system:
 
 **Scenario Testing (One-shot Mode):**
-1. **GENERATE Scenario**: `go run gennai/main.go "Create a new Go HTTP server with health check endpoint"`
-2. **ANALYZE_CODE Scenario**: `go run gennai/main.go "Analyze the architecture and dependencies of this codebase"`
-3. **INVESTIGATE_FILESYSTEM Scenario**: `go run gennai/main.go "List all Go files and their purposes in this project"`
-4. **DEBUG Scenario**: `go run gennai/main.go "Find and fix any compilation errors in this project"`
-5. **TEST Scenario**: `go run gennai/main.go "Create comprehensive unit tests for the ScenarioRunner"`
-6. **REFACTOR Scenario**: `go run gennai/main.go "Refactor the scenario system for better maintainability"`
-7. **RESEARCH Scenario**: `go run gennai/main.go "Research best practices for Go dependency injection patterns"`
-8. **RESPOND Scenario**: `go run gennai/main.go "Explain the difference between channels and mutexes in Go"`
+1. **CODE Scenario**: `go run gennai/main.go "Create a new Go HTTP server with health check endpoint"`
+2. **RESPOND Scenario**: `go run gennai/main.go "Explain the difference between channels and mutexes in Go"`
 
 **Security Testing:**
 1. **Filesystem Access Control**: Try generating files outside working directory
