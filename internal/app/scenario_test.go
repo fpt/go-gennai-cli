@@ -1,4 +1,4 @@
-package agent
+package app
 
 import (
 	"context"
@@ -44,9 +44,11 @@ func TestActionSelectionResponse_JSONSerialization(t *testing.T) {
 // mockLLM is a simple mock for testing
 type mockLLM struct{}
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
+
+func (m *mockLLM) ModelID() string { return "mock-llm" }
 
 // TestScenarioBasedToolSelection tests that different scenarios get different tool managers
 func TestScenarioBasedToolSelection(t *testing.T) {
@@ -74,8 +76,12 @@ func TestScenarioBasedToolSelection(t *testing.T) {
 	bashConfig := tool.BashConfig{WorkingDir: workingDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)
 
+	// Create search manager for Glob/Grep tools
+	searchConfig := tool.SearchConfig{WorkingDir: workingDir}
+	searchManager := tool.NewSearchToolManager(searchConfig)
+
 	// Create universal manager (always available tools)
-	universalManager := tool.NewCompositeToolManager(todoManager, filesystemManager, bashManager)
+	universalManager := tool.NewCompositeToolManager(todoManager, filesystemManager, bashManager, searchManager)
 
 	// Create web manager (optional for web scenarios)
 	webManager := tool.NewWebToolManager()
@@ -128,7 +134,7 @@ func TestScenarioBasedToolSelection(t *testing.T) {
 			tools := toolManager.GetTools()
 
 			// ALL scenarios should have universal tools (todos, filesystem, bash, grep)
-			universalTools := []string{"todo_write", "read_file", "write_file", "list_directory", "run_grep"}
+			universalTools := []string{"todo_write", "Read", "Write", "LS", "Grep"}
 			for _, toolName := range universalTools {
 				if _, exists := tools[message.ToolName(toolName)]; !exists {
 					t.Errorf("%s: Expected universal tool '%s' but didn't find it", tc.description, toolName)
@@ -136,7 +142,7 @@ func TestScenarioBasedToolSelection(t *testing.T) {
 			}
 
 			// Check for web tools (only for "default" scenarios)
-			webTools := []string{"duckduckgo_search", "fetch_web", "wikipedia_search"}
+			webTools := []string{"WebFetch", "WebSearch"}
 			hasWebTools := false
 			for _, toolName := range webTools {
 				if _, exists := tools[message.ToolName(toolName)]; exists {
@@ -177,14 +183,14 @@ func TestCompositeToolManager(t *testing.T) {
 	// Test that we get tools from both managers
 	tools := composite.GetTools()
 
-	// Should have tools from bash manager (like run_grep)
-	if _, exists := tools[message.ToolName("run_grep")]; !exists {
-		t.Error("Expected to find run_grep tool from bash manager")
+	// Should have tools from bash manager
+	if _, exists := tools[message.ToolName("bash")]; !exists {
+		t.Error("Expected to find bash tool from bash manager")
 	}
 
 	// Should have tools from filesystem manager
-	if _, exists := tools[message.ToolName("read_file")]; !exists {
-		t.Error("Expected to find read_file tool from filesystem manager")
+	if _, exists := tools[message.ToolName("Read")]; !exists {
+		t.Error("Expected to find Read tool from filesystem manager")
 	}
 
 	// Should have tools from todo manager
@@ -193,10 +199,10 @@ func TestCompositeToolManager(t *testing.T) {
 	}
 
 	// Should be able to get individual tools
-	if tool, exists := composite.GetTool(message.ToolName("read_file")); !exists {
-		t.Error("Expected to be able to get read_file tool")
+	if tool, exists := composite.GetTool(message.ToolName("Read")); !exists {
+		t.Error("Expected to be able to get Read tool")
 	} else if tool == nil {
-		t.Error("Got nil tool when expecting read_file")
+		t.Error("Got nil tool when expecting Read")
 	}
 }
 

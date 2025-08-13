@@ -1,8 +1,11 @@
-package agent
+package app
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/fpt/go-gennai-cli/internal/scenarios"
 	"github.com/fpt/go-gennai-cli/internal/tool"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
+	"github.com/fpt/go-gennai-cli/pkg/agent/events"
 	"github.com/fpt/go-gennai-cli/pkg/agent/react"
 	"github.com/fpt/go-gennai-cli/pkg/agent/state"
 	"github.com/fpt/go-gennai-cli/pkg/client"
@@ -63,15 +67,20 @@ type ScenarioRunner struct {
 	sessionFilePath  string            // Path to session state file for persistence
 	settings         *config.Settings  // Application settings for configuration
 	logger           *pkgLogger.Logger // Structured logger for this component
+	out              io.Writer         // Output writer for streaming/printing
+	thinkingStarted  bool              // Track if thinking has started for emoji handling
 }
 
+// WorkingDir returns the scenario runner's working directory
+func (s *ScenarioRunner) WorkingDir() string { return s.workingDir }
+
 // NewScenarioRunner creates a new ScenarioRunner with MCP tools, settings, and additional scenario paths
-func NewScenarioRunner(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, additionalScenarioPaths ...string) *ScenarioRunner {
-	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, false, true, additionalScenarioPaths...)
+func NewScenarioRunner(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, additionalScenarioPaths ...string) *ScenarioRunner {
+	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, additionalScenarioPaths...)
 }
 
 // NewScenarioRunnerWithOptions creates a new ScenarioRunner with session control options
-func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, skipSessionRestore bool, isInteractiveMode bool, additionalScenarioPaths ...string) *ScenarioRunner {
+func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, skipSessionRestore bool, isInteractiveMode bool, additionalScenarioPaths ...string) *ScenarioRunner {
 	// Create individual managers for universal tool manager
 	// Only create persistent todo manager in interactive mode
 	var todoToolManager *tool.TodoToolManager
@@ -91,8 +100,11 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	}
 	bashToolManager := tool.NewBashToolManager(bashConfig)
 
+	// Create search tool manager (Glob/Grep)
+	searchToolManager := tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir})
+
 	// Create universal tool manager (always available tools)
-	universalManager := tool.NewCompositeToolManager(todoToolManager, filesystemManager, bashToolManager)
+	universalManager := tool.NewCompositeToolManager(todoToolManager, filesystemManager, bashToolManager, searchToolManager)
 
 	// Create optional web tool manager for web scenarios
 	webToolManager := tool.NewWebToolManager()
@@ -100,7 +112,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	// Load scenario configurations (built-in + additional)
 	scenarios, err := infra.LoadScenarios(additionalScenarioPaths...)
 	if err != nil {
-		logger.WarnWithIcon("⚠️", "Failed to load scenarios, using empty fallback",
+		logger.Warn("Failed to load scenarios, using empty fallback",
 			"error", err, "paths", additionalScenarioPaths)
 		scenarios = make(infra.ScenarioMap) // Use empty map as fallback
 	}
@@ -119,25 +131,25 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 				if !skipSessionRestore {
 					// Try to load existing session state
 					if err := sharedState.LoadFromFile(sessionFilePath); err != nil {
-						logger.DebugWithIcon("🔄", "Starting with new session",
+						logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with new session",
 							"reason", "could not load existing session", "error", err)
 					} else {
-						logger.InfoWithIcon("📚", "Restored session state",
+						logger.DebugWithIntention(pkgLogger.IntentionStatus, "Restored session state",
 							"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
 					}
 				} else {
-					logger.DebugWithIcon("🔄", "Starting with clean session",
+					logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session",
 						"reason", "session restore skipped for file mode")
 				}
 			} else {
-				logger.WarnWithIcon("⚠️", "Could not get session file path", "error", err)
+				logger.Warn("Could not get session file path", "error", err)
 			}
 		} else {
-			logger.WarnWithIcon("⚠️", "Could not access user config for session persistence", "error", err)
+			logger.Warn("Could not access user config for session persistence", "error", err)
 		}
 	} else {
 		// One-shot mode: no session persistence, always start clean
-		logger.DebugWithIcon("🔄", "Starting with clean session", "reason", "one-shot mode")
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
 	}
 
 	return &ScenarioRunner{
@@ -152,6 +164,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 		sessionFilePath:  sessionFilePath,
 		settings:         settings,
 		logger:           logger.WithComponent("scenario-runner"),
+		out:              out,
 	}
 }
 
@@ -161,8 +174,6 @@ func (s *ScenarioRunner) Invoke(ctx context.Context, userInput string, scenarioN
 	if _, exists := s.scenarios[scenarioName]; !exists {
 		return nil, fmt.Errorf("scenario '%s' not found", scenarioName)
 	}
-
-	fmt.Printf("📋 Using scenario: %s\n", scenarioName)
 
 	// Execute scenario directly with CLI reasoning
 	return s.executeScenario(ctx, userInput, scenarioName, "Scenario specified directly via CLI")
@@ -186,7 +197,9 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 	if s.settings != nil && s.settings.Agent.MaxIterations > 0 {
 		maxIterations = s.settings.Agent.MaxIterations
 	}
-	reactClient := react.NewReAct(llmWithTools, toolManager, s.sharedState, aligner, maxIterations)
+	// Create ReAct client which returns its own event emitter, then set up event handlers
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, toolManager, s.sharedState, aligner, maxIterations)
+	s.setupEventHandlers(eventEmitter)
 
 	// Step 2: Execute the scenario through ReAct
 	actionResp := &ActionSelectionResponse{
@@ -194,17 +207,81 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 		Reasoning: reasoning,
 	}
 
-	actionPrompt := s.createActionPrompt(userInput, actionResp)
+	// Prepare a stable system prompt (scenario header) and insert only when changed
+	// Render with empty userInput so the header remains stable across turns;
+	// include workingDir and reasoning so those parts remain accurate.
+	if scenarioConfig, exists := s.scenarios[actionResp.Action]; exists {
+		systemPrompt := scenarioConfig.RenderPrompt("", actionResp.Reasoning, s.workingDir)
+		if systemPrompt != "" {
+			// Use a discoverable marker so we can detect previous insertion
+			marker := fmt.Sprintf("[[SCENARIO_PROMPT:%s]]\n", actionResp.Action)
+			candidate := marker + systemPrompt
 
-	result, err := reactClient.Invoke(ctx, actionPrompt)
+			// Find the most recent matching marker message
+			var lastMatched string
+			for _, msg := range s.sharedState.GetMessages() {
+				if msg.Type() == message.MessageTypeSystem && strings.HasPrefix(msg.Content(), marker) {
+					lastMatched = msg.Content()
+				}
+			}
+
+			if lastMatched == "" || lastMatched != candidate {
+				s.sharedState.AddMessage(message.NewSystemMessage(candidate))
+			}
+		}
+	}
+
+	// Build the user-facing prompt content (raw request + current todos)
+	userPrompt := userInput
+	if s.todoToolManager != nil {
+		if todosContext := s.todoToolManager.GetTodosForPrompt(); todosContext != "" {
+			userPrompt = fmt.Sprintf("%s\n\n## Current Todos:\n%s\n\nUse TodoWrite tool to update todos as you progress.", userPrompt, todosContext)
+		}
+	}
+
+	// Expand line-based includes in the user prompt: lines starting with @filename
+	if strings.Contains(userPrompt, "@") {
+		lines := strings.Split(userPrompt, "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "@") {
+				rel := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+				if rel == "" {
+					// Drop empty includes
+					continue
+				}
+				var fullPath string
+				if filepath.IsAbs(rel) {
+					fullPath = rel
+				} else {
+					fullPath = filepath.Join(s.workingDir, rel)
+				}
+				if data, err := os.ReadFile(fullPath); err == nil {
+					out = append(out,
+						"----- BEGIN "+rel+" -----",
+						string(data),
+						"----- END "+rel+" -----",
+					)
+					continue
+				}
+				// Unreadable file; drop directive
+				continue
+			}
+			out = append(out, line)
+		}
+		userPrompt = strings.Join(out, "\n")
+	}
+
+	result, err := reactClient.Invoke(ctx, userPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
 
-	// Save session state after successful interaction (like Claude Code)
+	// Save session state after successful interaction
 	if s.sessionFilePath != "" {
 		if saveErr := s.sharedState.SaveToFile(s.sessionFilePath); saveErr != nil {
-			s.logger.WarnWithIcon("⚠️", "Failed to save session state",
+			s.logger.Warn("Failed to save session state",
 				"session_file", s.sessionFilePath, "error", saveErr)
 		}
 	}
@@ -220,7 +297,7 @@ func (s *ScenarioRunner) ClearHistory() {
 	// Save cleared state to session file
 	if s.sessionFilePath != "" {
 		if saveErr := s.sharedState.SaveToFile(s.sessionFilePath); saveErr != nil {
-			s.logger.WarnWithIcon("⚠️", "Failed to save cleared session state",
+			s.logger.Warn("Failed to save cleared session state",
 				"session_file", s.sessionFilePath, "error", saveErr)
 		}
 	}
@@ -246,15 +323,15 @@ func (s *ScenarioRunner) getToolManagerForScenario(scenario string) domain.ToolM
 				// Wildcard: add all available MCP tool managers
 				for availableMCPName, mcpManager := range s.mcpToolManagers {
 					managers = append(managers, mcpManager)
-					s.logger.DebugWithIcon("✅", "Added MCP tool manager (wildcard)",
+					s.logger.DebugWithIntention(pkgLogger.IntentionSuccess, "Added MCP tool manager (wildcard)",
 						"scenario", scenario, "mcp_name", availableMCPName)
 				}
 			} else if mcpManager, exists := s.mcpToolManagers[mcpName]; exists {
 				managers = append(managers, mcpManager)
-				s.logger.DebugWithIcon("✅", "Added MCP tool manager",
+				s.logger.DebugWithIntention(pkgLogger.IntentionSuccess, "Added MCP tool manager",
 					"scenario", scenario, "mcp_name", mcpName)
 			} else {
-				s.logger.WarnWithIcon("⚠️", "MCP tool manager not available, skipping",
+				s.logger.Warn("MCP tool manager not available, skipping",
 					"scenario", scenario, "mcp_name", mcpName)
 			}
 		}
@@ -288,7 +365,9 @@ func (s *ScenarioRunner) InvokeWithOptions(ctx context.Context, prompt string) (
 	if s.settings != nil && s.settings.Agent.MaxIterations > 0 {
 		maxIterations = s.settings.Agent.MaxIterations
 	}
-	reactClient := react.NewReAct(llmWithTools, s.universalManager, s.sharedState, aligner, maxIterations)
+	// Create ReAct client which returns its own event emitter, then set up event handlers
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, s.universalManager, s.sharedState, aligner, maxIterations)
+	s.setupEventHandlers(eventEmitter)
 
 	return reactClient.Invoke(ctx, prompt)
 }
@@ -333,39 +412,87 @@ func (s *ScenarioRunner) GetConversationPreview(maxMessages int) string {
 	return preview.String()
 }
 
-// PrintPhaseModels displays scenario runner configuration
-func (s *ScenarioRunner) PrintPhaseModels() {
-	fmt.Printf("\n🤖 Scenario Runner Configuration\n")
-	fmt.Printf("==============================\n")
-	fmt.Printf("Pattern: Scenario Planning -> Sequential Action Execution\n")
-	fmt.Printf("Working Directory: %s\n", s.workingDir)
-	fmt.Printf("==============================\n\n")
+// GetMessageState returns the shared message state for context calculations
+func (s *ScenarioRunner) GetMessageState() domain.State {
+	return s.sharedState
 }
 
-// createActionPrompt creates a detailed prompt for the selected action using YAML configurations
-func (s *ScenarioRunner) createActionPrompt(userInput string, actionResp *ActionSelectionResponse) string {
-	workingDir := s.workingDir
-	if workingDir == "" {
-		workingDir = "current directory"
+// GetLLMClient returns the LLM client for context window estimation
+func (s *ScenarioRunner) GetLLMClient() domain.LLM {
+	return s.llmClient
+}
+
+// OutWriter returns the output writer used for streaming thinking/log lines
+func (s *ScenarioRunner) OutWriter() io.Writer {
+	if s.out != nil {
+		return s.out
 	}
+	return os.Stdout
+}
 
-	// Get current todos for prompt injection (Claude Code-style)
-	var todosContext string
-	if s.todoToolManager != nil {
-		todosContext = s.todoToolManager.GetTodosForPrompt()
-	}
-
-	// Use YAML configuration for this scenario
-	if scenarioConfig, exists := s.scenarios[actionResp.Action]; exists {
-		basePrompt := scenarioConfig.RenderPrompt(userInput, actionResp.Reasoning, workingDir)
-
-		// Inject todos into prompt context if available
-		if todosContext != "" {
-			return fmt.Sprintf("%s\n\n## Current Todos:\n%s\n\nUse TodoWrite tool to update todos as you progress.", basePrompt, todosContext)
+// setupEventHandlers configures event handlers to convert events back to output format
+func (s *ScenarioRunner) setupEventHandlers(emitter events.EventEmitter) {
+	emitter.AddHandler(func(event events.AgentEvent) {
+		writer := s.OutWriter()
+		if writer == nil {
+			return
 		}
-		return basePrompt
-	}
 
-	// Should not reach here if YAML scenarios are complete
-	return fmt.Sprintf("Error: No scenario configuration found for %s", actionResp.Action)
+		switch event.Type {
+		case events.EventTypeToolCallStart:
+			if data, ok := event.Data.(events.ToolCallStartData); ok {
+				fmt.Fprintf(writer, "🔧 Running tool %s %v\n", data.ToolName, data.Arguments)
+			}
+
+		case events.EventTypeToolResult:
+			if data, ok := event.Data.(events.ToolResultData); ok {
+				if data.Content == "" {
+					fmt.Fprintln(writer, "↳ (no output)")
+				} else if data.IsError {
+					// Show error messages with error icon
+					lines := strings.Split(data.Content, "\n")
+					for _, line := range lines {
+						fmt.Fprintf(writer, "❌ %s\n", line)
+					}
+				} else {
+					// Show successful results with arrow
+					lines := strings.Split(data.Content, "\n")
+					maxLines := 5
+					if len(lines) > maxLines {
+						fmt.Fprintf(writer, "↳ ...(%d more lines)\n", len(lines)-maxLines)
+						lines = lines[len(lines)-maxLines:]
+					}
+					for _, line := range lines {
+						if len(line) > 80 {
+							line = line[:77] + "..."
+						}
+						fmt.Fprintf(writer, "↳ %s\n", line)
+					}
+				}
+			}
+
+		case events.EventTypeThinkingChunk:
+			if data, ok := event.Data.(events.ThinkingChunkData); ok {
+				// First content triggers header
+				if !s.thinkingStarted {
+					fmt.Fprint(writer, "\x1b[90m💭 ") // Gray thinking emoji
+					s.thinkingStarted = true
+				}
+				// Print content in gray without reset
+				fmt.Fprintf(writer, "\x1b[90m%s", data.Content)
+			}
+
+		case events.EventTypeResponse:
+			// Reset thinking state when response is complete
+			if s.thinkingStarted {
+				fmt.Fprint(writer, "\x1b[0m\n") // Reset color and newline
+				s.thinkingStarted = false
+			}
+
+		case events.EventTypeError:
+			if data, ok := event.Data.(events.ErrorData); ok {
+				fmt.Fprintf(writer, "❌ Error: %v\n", data.Error)
+			}
+		}
+	})
 }

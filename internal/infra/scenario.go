@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/internal/repository"
@@ -95,6 +96,67 @@ func (s *ScenarioConfig) RenderPrompt(userInput, scenarioReason, workingDir stri
 	prompt = strings.ReplaceAll(prompt, "{{scenarioReason}}", scenarioReason)
 	prompt = strings.ReplaceAll(prompt, "{{workingDir}}", workingDir)
 
+	// Expand optional file includes of the form: {{ @ path/to/file }}
+	// - If the file exists, replace with its content
+	// - If not, remove the placeholder
+	includeRe := regexp.MustCompile(`\{\{\s*@([^}]+?)\s*\}\}`)
+	prompt = includeRe.ReplaceAllStringFunc(prompt, func(m string) string {
+		matches := includeRe.FindStringSubmatch(m)
+		if len(matches) < 2 {
+			return ""
+		}
+		rel := strings.TrimSpace(matches[1])
+		if rel == "" {
+			return ""
+		}
+		var fullPath string
+		if filepath.IsAbs(rel) {
+			fullPath = rel
+		} else {
+			fullPath = filepath.Join(workingDir, rel)
+		}
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return ""
+		}
+		return string(data)
+	})
+
+	// Expand line-based includes of the form: "@ path/to/file" at the beginning of a line
+	// Insert filename with separators for clearer boundaries between sections.
+	// If file is missing, drop the directive line.
+	{
+		lines := strings.Split(prompt, "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "@") {
+				rel := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+				if rel == "" {
+					continue
+				}
+				var fullPath string
+				if filepath.IsAbs(rel) {
+					fullPath = rel
+				} else {
+					fullPath = filepath.Join(workingDir, rel)
+				}
+				if data, err := os.ReadFile(fullPath); err == nil {
+					out = append(out,
+						"----- BEGIN "+rel+" -----",
+						string(data),
+						"----- END "+rel+" -----",
+					)
+					continue
+				}
+				// File not found or unreadable; drop the directive
+				continue
+			}
+			out = append(out, line)
+		}
+		prompt = strings.Join(out, "\n")
+	}
+
 	return prompt
 }
 
@@ -162,10 +224,11 @@ func loadScenarioFile(filePath string, scenarios ScenarioMap) error {
 		return fmt.Errorf("failed to parse scenario file %s: %w", filePath, err)
 	}
 
-	// Add scenarios to the map, setting the name
+	// Add scenarios to the map, setting the name and normalizing keys to uppercase for case-insensitive lookup
 	for scenarioName, scenarioConfig := range fileScenarios {
-		scenarioConfig.name = scenarioName
-		scenarios[scenarioName] = &scenarioConfig
+		scenarioConfig.name = scenarioName              // Keep original name for display
+		normalizedName := strings.ToUpper(scenarioName) // Normalize key for case-insensitive lookup
+		scenarios[normalizedName] = &scenarioConfig
 	}
 
 	return nil

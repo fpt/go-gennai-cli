@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	defaultMaxTokens    = 8192
-	maxTokensStopReason = "max_tokens"
+	defaultMaxTokens = 8192
 )
 
 // AnthropicCore contains shared Anthropic client resources and core functionality
@@ -43,7 +42,8 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 	)
 
 	// Use default if maxTokens is 0 or negative
-	if maxTokens <= 0 {
+	// NOTE: Anthropic requires minimum tokens.
+	if maxTokens <= 0 || maxTokens < defaultMaxTokens {
 		maxTokens = defaultMaxTokens
 	}
 
@@ -59,6 +59,11 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 type AnthropicClient struct {
 	*AnthropicCore
 	toolManager domain.ToolManager
+
+	// Telemetry and caching/session hints
+	lastUsage message.TokenUsage
+	sessionID string
+	cacheOpts domain.ModelSideCacheOptions
 }
 
 // NewAnthropicClient creates a new Anthropic client with tool calling and thinking capabilities
@@ -86,6 +91,31 @@ func NewAnthropicClientFromCore(core *AnthropicCore) domain.ToolCallingLLM {
 	}
 }
 
+// ModelIdentifier implementation
+func (c *AnthropicClient) ModelID() string { return c.model }
+
+// ContextWindowProvider implementation
+func (c *AnthropicClient) MaxContextTokens() int {
+	return getModelContextWindow(c.model)
+}
+
+// TokenUsageProvider implementation (populated from Message.Usage when available)
+func (c *AnthropicClient) LastTokenUsage() (message.TokenUsage, bool) {
+	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
+		return c.lastUsage, true
+	}
+	return message.TokenUsage{}, false
+}
+
+// SessionAware implementation
+func (c *AnthropicClient) SetSessionID(id string) { c.sessionID = id }
+func (c *AnthropicClient) SessionID() string      { return c.sessionID }
+
+// ModelSideCacheConfigurator implementation (store hints for later use)
+func (c *AnthropicClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions) {
+	c.cacheOpts = opts
+}
+
 // IsToolCapable checks if the Anthropic client supports native tool calling
 func (c *AnthropicClient) IsToolCapable() bool {
 	// Anthropic API always supports native tool calling
@@ -93,7 +123,7 @@ func (c *AnthropicClient) IsToolCapable() bool {
 }
 
 // ChatWithToolChoice sends a message to Claude with tool choice control
-func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to Anthropic format
 	anthropicMessages := toAnthropicMessages(messages)
 
@@ -120,77 +150,20 @@ func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []mes
 		messageParams.ToolChoice = anthropicToolChoice
 	}
 
-	// Check if we have tool results in the conversation history
-	// If so, disable thinking to avoid Anthropic's format restrictions
-	hasToolResults := false
-	for _, msg := range messages {
-		if msg.Type() == message.MessageTypeToolResult {
-			hasToolResults = true
-			break
-		}
-	}
-	
-	// Enable thinking with streaming for progressive display only if no tool results and model supports it
-	if !hasToolResults && supportsThinking(c.model) {
-		// Add thinking configuration to the message params with minimum required budget
+	// Determine if we should enable thinking (only for supported models)
+	shouldEnableThinking := supportsThinking(c.model)
+
+	// Add thinking configuration if supported
+	if shouldEnableThinking {
 		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
 			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
 				BudgetTokens: int64(2048), // Set a reasonable thinking budget (minimum 1024)
 			},
 		}
-		
-		// Use streaming with thinking
-		return c.chatWithStreaming(ctx, messageParams, true)
 	}
-	
-	// Fall back to non-streaming for tool result conversations
-	msg, err := c.client.Messages.New(ctx, messageParams)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic API error: %w", err)
-	}
-	
-	// Handle the response similar to the old non-streaming logic
-	if len(msg.Content) == 0 {
-		return nil, fmt.Errorf("no content in Anthropic response")
-	}
-	
-	// Handle different content block types
-	var content string
-	var toolCalls []anthropic.ToolUseBlock
-	
-	for _, contentBlock := range msg.Content {
-		switch variant := contentBlock.AsAny().(type) {
-		case anthropic.TextBlock:
-			content += variant.Text
-		case anthropic.ToolUseBlock:
-			// Collect tool calls
-			toolCalls = append(toolCalls, variant)
-		}
-	}
-	
-	// If we have tool calls, return the first one (for now)
-	if len(toolCalls) > 0 {
-		toolCall := toolCalls[0]
-		toolArgs := make(map[string]any)
-		if toolCall.Input != nil {
-			// Debug: Log the raw tool call input from Claude
-			fmt.Printf("DEBUG: Anthropic non-streaming tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
 
-			// Parse the JSON input to map[string]any
-			if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
-				return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
-			}
-
-			fmt.Printf("DEBUG: Parsed tool args: %v\n", toolArgs)
-		}
-
-		return message.NewToolCallMessage(
-			message.ToolName(toolCall.Name),
-			message.ToolArgumentValues(toolArgs),
-		), nil
-	}
-	
-	return message.NewChatMessage(message.MessageTypeAssistant, content), nil
+	// Always use streaming for all models (thinking display only if enabled and no tool results)
+	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
 }
 
 // SetToolManager sets the tool manager for dynamic tool definitions
@@ -205,7 +178,7 @@ func (c *AnthropicClient) SupportsVision() bool {
 }
 
 // ChatWithThinking sends a message to Claude with thinking control
-func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to Anthropic format
 	anthropicMessages := toAnthropicMessages(messages)
 
@@ -226,181 +199,95 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, 
 		Tools:     tools,
 	}
 
-	// Enable thinking with streaming for progressive display only if model supports it
-	if enableThinking && supportsThinking(c.model) {
-		// Add thinking configuration to the message params with minimum required budget
+	// Determine if we should enable thinking (only for supported models)
+	shouldEnableThinking := enableThinking && supportsThinking(c.model)
+
+	// Add thinking configuration if requested and supported
+	if shouldEnableThinking {
 		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
 			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
 				BudgetTokens: int64(2048), // Set a reasonable thinking budget (minimum 1024)
 			},
 		}
-		return c.chatWithStreaming(ctx, messageParams, true)
 	}
 
-	msg, err := c.client.Messages.New(ctx, messageParams)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic API error: %w", err)
-	}
-
-	// Debug: Log token usage from Anthropic API response
-	outputTokens := msg.Usage.OutputTokens
-	totalTokens := msg.Usage.InputTokens + outputTokens
-	utilizationPct := float64(outputTokens) / float64(c.maxTokens) * 100
-
-	fmt.Printf("DEBUG: Anthropic API Usage - Input: %d tokens, Output: %d tokens, Total: %d tokens, Stop Reason: %s\n",
-		msg.Usage.InputTokens, outputTokens, totalTokens, msg.StopReason)
-	fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (%d/%d)\n",
-		utilizationPct, outputTokens, c.maxTokens)
-
-	// Warn if we're approaching the limit or hit it
-	if utilizationPct > 90 {
-		fmt.Printf("⚠️  WARNING: Very high token usage (%.1f%%) - potential truncation risk!\n", utilizationPct)
-	} else if utilizationPct > 80 {
-		fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
-	}
-
-	// Check if response was truncated due to token limits
-	if msg.StopReason == maxTokensStopReason {
-		fmt.Printf("🚨 TRUNCATED: Response was cut off due to max_tokens limit!\n")
-	}
-
-	// Handle different content block types
-	var content string
-	var thinking string
-	var toolCalls []anthropic.ToolUseBlock
-
-	for _, contentBlock := range msg.Content {
-		switch variant := contentBlock.AsAny().(type) {
-		case anthropic.TextBlock:
-			content += variant.Text
-		case anthropic.ToolUseBlock:
-			// Collect tool calls
-			toolCalls = append(toolCalls, variant)
-		case anthropic.ThinkingBlock:
-			// Extract thinking content if present
-			thinking += variant.Thinking
-		case anthropic.RedactedThinkingBlock:
-			// Skip redacted thinking blocks
-			continue
-		default:
-			// For other block types, try to extract text if available
-			if textBlock, ok := variant.(anthropic.TextBlock); ok {
-				content += textBlock.Text
-			}
-		}
-	}
-
-	// If we have tool calls, return the first one (for now)
-	if len(toolCalls) > 0 {
-		toolCall := toolCalls[0]
-		toolArgs := make(map[string]any)
-		if toolCall.Input != nil {
-			// Debug: Log the raw tool call input from Claude
-			fmt.Printf("DEBUG: Anthropic tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
-
-			// Parse the JSON input to map[string]interface{}
-			if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
-				return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
-			}
-
-			// Debug: Log the parsed arguments
-			fmt.Printf("DEBUG: Parsed tool args: %+v\n", toolArgs)
-		}
-
-		return message.NewToolCallMessage(
-			message.ToolName(unsanitizeToolNameFromAnthropic(toolCall.Name)),
-			message.ToolArgumentValues(toolArgs),
-		), nil
-	}
-
-	// Create response message with thinking content if available
-	var response message.Message
-	if thinking != "" {
-		response = message.NewChatMessageWithThinking(message.MessageTypeAssistant, content, thinking)
-	} else {
-		response = message.NewChatMessage(message.MessageTypeAssistant, content)
-	}
-
-	return response, nil
+	// Use streaming for all models (thinking display only if enabled and supported)
+	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
 }
 
 // chatWithStreaming handles streaming generation with progressive thinking display using Message.Accumulate pattern
-func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams anthropic.MessageNewParams, showThinking bool) (message.Message, error) {
+func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams anthropic.MessageNewParams, showThinking bool, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Create streaming request
 	stream := c.client.Messages.NewStreaming(ctx, messageParams)
-	
+
 	// Use Message.Accumulate pattern for proper streaming handling
 	var acc anthropic.Message
 	var thinkingBuilder strings.Builder
-	hasShownThinkingHeader := false
-	
+	var signatureBuilder strings.Builder
+
 	// Process streaming events
 	for stream.Next() {
 		event := stream.Current()
-		
+
 		// Accumulate the event into the message
 		if err := acc.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("failed to accumulate streaming event: %w", err)
 		}
-		
+
 		// Handle thinking display for progressive feedback
 		switch eventData := event.AsAny().(type) {
 		case anthropic.ContentBlockDeltaEvent:
 			if delta, ok := eventData.Delta.AsAny().(anthropic.ThinkingDelta); ok {
 				// Thinking content - show progressively
 				if delta.Thinking != "" && showThinking {
-					// Show thinking header only once
-					if !hasShownThinkingHeader {
-						fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-						hasShownThinkingHeader = true
+					// Send thinking content to channel if enabled
+					if enableThinking && thinkingChan != nil {
+						message.SendThinkingContent(thinkingChan, delta.Thinking)
 					}
-					
-					// Display progressive thinking in light gray
-					fmt.Printf("\x1b[90m%s", delta.Thinking) // Light gray
-					os.Stdout.Sync() // Force flush
-					
+
 					// Accumulate thinking content
 					thinkingBuilder.WriteString(delta.Thinking)
 				}
+			} else if delta, ok := eventData.Delta.AsAny().(anthropic.SignatureDelta); ok {
+				// Signature content - accumulate but don't display
+				if delta.Signature != "" {
+					signatureBuilder.WriteString(delta.Signature)
+				}
 			}
-			
+
 		case anthropic.ContentBlockStartEvent:
 			if block, ok := eventData.ContentBlock.AsAny().(anthropic.ThinkingBlock); ok {
-				// Thinking block started
-				if showThinking && !hasShownThinkingHeader {
-					fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji  
-					hasShownThinkingHeader = true
-				}
-				// Add initial thinking content if present
+				// Thinking block started - send initial thinking content if present
 				if block.Thinking != "" && showThinking {
-					fmt.Printf("\x1b[90m%s", block.Thinking)
-					os.Stdout.Sync()
+					// Send thinking content to channel if enabled
+					if enableThinking && thinkingChan != nil {
+						message.SendThinkingContent(thinkingChan, block.Thinking)
+					}
 					thinkingBuilder.WriteString(block.Thinking)
 				}
 			}
 		}
 	}
-	
+
 	// Check for streaming errors
 	if stream.Err() != nil {
 		return nil, fmt.Errorf("anthropic streaming error: %w", stream.Err())
 	}
-	
-	// Reset color and add newline if we showed thinking
-	if hasShownThinkingHeader {
-		fmt.Print("\x1b[0m\n") // Reset color
+
+	// Signal end of thinking if we accumulated thinking content
+	if thinkingBuilder.Len() > 0 && enableThinking && thinkingChan != nil {
+		message.EndThinking(thinkingChan)
 	}
-	
+
 	// Now process the accumulated message like the non-streaming version
 	if len(acc.Content) == 0 {
 		return nil, fmt.Errorf("no content in accumulated Anthropic message")
 	}
-	
+
 	// Handle different content block types from accumulated message
 	var content string
-	var thinking string
 	var toolCalls []anthropic.ToolUseBlock
-	
+
 	for _, contentBlock := range acc.Content {
 		switch variant := contentBlock.AsAny().(type) {
 		case anthropic.TextBlock:
@@ -409,45 +296,79 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 			// Collect tool calls from accumulated message
 			toolCalls = append(toolCalls, variant)
 		case anthropic.ThinkingBlock:
-			// Extract thinking content if present
-			thinking += variant.Thinking
+			// Skip - thinking content captured via streaming events
+			continue
 		case anthropic.RedactedThinkingBlock:
 			// Skip redacted thinking blocks
 			continue
 		}
 	}
-	
-	// If we have tool calls, return the first one (for now)
+
+	// Get accumulated thinking content and signature from streaming
+	finalThinking := thinkingBuilder.String()
+	finalSignature := signatureBuilder.String()
+
+	// If we have tool calls, return a batch when multiple; single otherwise
 	if len(toolCalls) > 0 {
-		toolCall := toolCalls[0]
-		toolArgs := make(map[string]any)
-		if toolCall.Input != nil {
-			// Debug: Log the raw tool call input from Claude
-			fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
-
-			// Parse the JSON input to map[string]any
-			if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
-				return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+		if len(toolCalls) == 1 {
+			toolCall := toolCalls[0]
+			toolArgs := make(map[string]any)
+			if toolCall.Input != nil {
+				if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
+					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+				}
 			}
-
-			fmt.Printf("DEBUG: Parsed tool args: %v\n", toolArgs)
+			if finalThinking != "" && finalSignature != "" {
+				return message.NewToolCallMessageWithThinkingAndSignature(
+					message.ToolName(toolCall.Name),
+					message.ToolArgumentValues(toolArgs),
+					finalThinking,
+					finalSignature,
+				), nil
+			} else if finalThinking != "" {
+				return message.NewToolCallMessageWithThinking(
+					message.ToolName(toolCall.Name),
+					message.ToolArgumentValues(toolArgs),
+					finalThinking,
+				), nil
+			}
+			return message.NewToolCallMessage(
+				message.ToolName(toolCall.Name),
+				message.ToolArgumentValues(toolArgs),
+			), nil
 		}
 
-		return message.NewToolCallMessage(
-			message.ToolName(toolCall.Name),
-			message.ToolArgumentValues(toolArgs),
-		), nil
+		// Build a batch of tool calls
+		var calls []*message.ToolCallMessage
+		for _, tc := range toolCalls {
+			args := make(map[string]any)
+			if tc.Input != nil {
+				if err := json.Unmarshal(tc.Input, &args); err != nil {
+					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+				}
+			}
+			// No per-call thinking; preserve thinking at batch level via aligner/system as needed
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Name),
+				message.ToolArgumentValues(args),
+			))
+		}
+		return message.NewToolCallBatch(calls), nil
 	}
-	
+
+	// Capture token usage if available in accumulated message
+	// Anthropic Usage includes: InputTokens, OutputTokens, CacheCreationInputTokens, CacheReadInputTokens
+	// We record input/output/total only for quick visibility; cache details can be added later if needed.
+	c.lastUsage = message.TokenUsage{
+		InputTokens:  int(acc.Usage.InputTokens),
+		OutputTokens: int(acc.Usage.OutputTokens),
+		TotalTokens:  int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
+	}
+
 	// Create response message with thinking content if available
-	if thinking != "" || thinkingBuilder.Len() > 0 {
-		// Use accumulated thinking from the message or the progressive builder
-		finalThinking := thinking
-		if thinkingBuilder.Len() > 0 {
-			finalThinking = thinkingBuilder.String()
-		}
+	if thinkingBuilder.Len() > 0 {
 		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, content, finalThinking), nil
 	}
-	
+
 	return message.NewChatMessage(message.MessageTypeAssistant, content), nil
 }

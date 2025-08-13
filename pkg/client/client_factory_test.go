@@ -18,12 +18,14 @@ type mockLLM struct {
 	toolManager            domain.ToolManager // Store the tool manager
 }
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, messages)
 	}
 	return nil, errors.New("mock not configured")
 }
+
+func (m *mockLLM) ModelID() string { return "mock-llm" }
 
 // SetToolManager sets the tool manager (mock implementation)
 func (m *mockLLM) SetToolManager(toolManager domain.ToolManager) {
@@ -42,12 +44,12 @@ func (m *mockLLM) GetToolManager() domain.ToolManager {
 }
 
 // ChatWithToolChoice sends a message with tool choice control (mock implementation)
-func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatWithToolChoiceFunc != nil {
 		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
 	}
 	// Fall back to regular chat for mock
-	return m.Chat(ctx, messages, false)
+	return m.Chat(ctx, messages, false, thinkingChan)
 }
 
 // Mock ToolManager
@@ -114,7 +116,7 @@ func TestClientWithTool_Chat(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := client.Chat(ctx, messages, false)
+	result, err := client.Chat(ctx, messages, false, nil)
 
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
@@ -143,7 +145,7 @@ func TestClientWithTool_Chat_Error(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := client.Chat(ctx, messages, false)
+	result, err := client.Chat(ctx, messages, false, nil)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -220,7 +222,7 @@ func TestClientWithTool_ChatWithToolChoice(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := client.ChatWithToolChoice(ctx, messages, expectedToolChoice)
+	result, err := client.ChatWithToolChoice(ctx, messages, expectedToolChoice, false, nil)
 
 	if err != nil {
 		t.Fatalf("ChatWithToolChoice returned error: %v", err)
@@ -232,17 +234,17 @@ func TestClientWithTool_ChatWithToolChoice(t *testing.T) {
 }
 
 func TestClientWithTool_UnderlyingClient(t *testing.T) {
-	mockLLM := &mockLLM{}
+	base := &mockLLM{}
 	mockToolManager := &mockToolManager{}
 
-	client, err := NewClientWithToolManager(mockLLM, mockToolManager)
+	client, err := NewClientWithToolManager(base, mockToolManager)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
 	// For mock clients, the factory should return the same client as it's already a ToolCallingLLM
-	if client != mockLLM {
-		t.Error("NewClientWithToolManager should return the same mock client")
+	if underlying, ok := client.(*mockLLM); !ok || underlying != base {
+		t.Error("NewClientWithToolManager should return the same mock client instance")
 	}
 }
 

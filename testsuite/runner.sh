@@ -14,11 +14,20 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Load environment variables from .env if present (project root)
+if [ -f ".env" ]; then
+    # Export variables defined in .env to child processes
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+fi
+
 # Check if CLI is set
 if [ -z "$CLI" ]; then
     echo "Error: CLI environment variable is not set"
     echo "Usage: CLI=path/to/gennai ./testsuite/runner.sh <testcase> <backend>"
-    echo "Example: CLI=output/gennai ./testsuite/runner.sh fibonacci_test ollama_gbnf"
+    echo "Example: CLI=output/gennai ./testsuite/runner.sh fibonacci anthropic"
     exit 1
 fi
 
@@ -104,6 +113,12 @@ echo -e "${YELLOW}🗂️  Created temporary test directory: $temp_test_dir${NC}
 echo -e "${YELLOW}📋 Copying test files to temporary directory...${NC}"
 cp -r "$testcase_dir/"* "$temp_test_dir/"
 
+# Copy the extract_response.sh utility script to the temp directory
+if [ -f "$script_dir/extract_response.sh" ]; then
+    cp "$script_dir/extract_response.sh" "$temp_test_dir/"
+    chmod +x "$temp_test_dir/extract_response.sh"
+fi
+
 # Use the temporary directory as the working directory (complete isolation)
 test_work_dir="$temp_test_dir"
 echo "Test working directory: $test_work_dir"
@@ -112,11 +127,23 @@ echo "Test working directory: $test_work_dir"
 
 # Run the test in the temporary directory using the copied files
 prompt_file="$temp_test_dir/prompt.txt"
-echo -e "${CYAN}Running: $CLI --workdir $test_work_dir --settings $backend_file -f $prompt_file${NC}"
-if "$CLI" --workdir "$test_work_dir" --settings "$backend_file" -f "$prompt_file" > "$output_file" 2> "$error_file"; then
-    exit_code=0
+run_script="$temp_test_dir/run.sh"
+
+# Check if custom run.sh exists and use it, otherwise use default command
+if [ -f "$run_script" ] && [ -x "$run_script" ]; then
+    echo -e "${CYAN}Running: $run_script $CLI $test_work_dir $backend_file $prompt_file${NC}"
+    if "$run_script" "$CLI" "$test_work_dir" "$backend_file" "$prompt_file" > "$output_file" 2> "$error_file"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 else
-    exit_code=$?
+    echo -e "${CYAN}Running: $CLI --workdir $test_work_dir --settings $backend_file -f $prompt_file${NC}"
+    if "$CLI" --workdir "$test_work_dir" --settings "$backend_file" -f "$prompt_file" > "$output_file" 2> "$error_file"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 fi
 
 echo ""
@@ -129,7 +156,7 @@ if [ $exit_code -eq 0 ]; then
     # Run the check script from the test working directory (use copied check.sh)
     echo -e "${YELLOW}🔍 Running validation check in: $test_work_dir${NC}"
     
-    if (cd "$test_work_dir" && "$temp_test_dir/check.sh" "$output_file" "$error_file"); then
+    if (cd "$test_work_dir" && TESTSUITE_DIR="$script_dir" "$temp_test_dir/check.sh" "$output_file" "$error_file"); then
         echo ""
         echo -e "${GREEN}✅ PASS: $testcase_name × $backend_name${NC}"
         # Clean up temporary directory and files

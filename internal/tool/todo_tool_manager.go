@@ -17,7 +17,7 @@ import (
 type TodoItem struct {
 	ID       string `json:"id"`
 	Content  string `json:"content"`
-	Status   string `json:"status"`   // pending, in_progress, done
+	Status   string `json:"status"`   // pending, in_progress, completed (compat: accepts 'done')
 	Priority string `json:"priority"` // high, medium, low
 	Created  string `json:"created"`
 	Updated  string `json:"updated"`
@@ -42,16 +42,16 @@ func NewTodoToolManager(projectPath string) *TodoToolManager {
 	// Get user configuration - this must succeed
 	userConfig, err := config.DefaultUserConfig()
 	if err != nil {
-		logger.ErrorWithIcon("❌", "Failed to create user config directory", "error", err)
-		logger.ErrorWithIcon("❌", "gennai requires $HOME/.gennai/ directory access")
+		logger.Error("Failed to create user config directory", "error", err)
+		logger.Error("gennai requires $HOME/.gennai/ directory access")
 		os.Exit(1)
 	}
 
 	// Get project-specific todo file - this must also succeed
 	todoFilePath, err := userConfig.GetProjectTodoFile(projectPath)
 	if err != nil {
-		logger.ErrorWithIcon("❌", "Failed to get project todo file", "error", err)
-		logger.ErrorWithIcon("❌", "Cannot create project directory in $HOME/.gennai/projects/")
+		logger.Error("Failed to get project todo file", "error", err)
+		logger.Error("Cannot create project directory in $HOME/.gennai/projects/")
 		os.Exit(1)
 	}
 
@@ -74,6 +74,9 @@ func NewTodoToolManagerWithPath(todoFilePath string) *TodoToolManager {
 	// Register todo tools
 	manager.registerTodoTools()
 
+	// Register task tools
+	manager.registerTaskTools()
+
 	return manager
 }
 
@@ -91,6 +94,9 @@ func NewInMemoryTodoToolManager() *TodoToolManager {
 
 	// Register todo tools
 	manager.registerTodoTools()
+
+	// Register task tools
+	manager.registerTaskTools()
 
 	return manager
 }
@@ -125,11 +131,30 @@ func (m *TodoToolManager) RegisterTool(name message.ToolName, description messag
 	m.tools[name] = tool
 }
 
+// IsAllCompleted reports whether there are todos and all of them are completed
+func (m *TodoToolManager) IsAllCompleted() bool {
+	m.todoState.mu.RLock()
+	defer m.todoState.mu.RUnlock()
+	if len(m.todoState.Items) == 0 {
+		return false
+	}
+	for _, it := range m.todoState.Items {
+		st := it.Status
+		if st == "done" {
+			st = "completed"
+		}
+		if st != "completed" {
+			return false
+		}
+	}
+	return true
+}
+
 // registerTodoTools registers all todo management tools
 func (m *TodoToolManager) registerTodoTools() {
-	// TodoWrite - Write/update todo list (Claude Code-style)
+	// TodoWrite - Write/update todo list
 	// Note: TodoRead removed - todos are injected into prompt context instead
-	m.RegisterTool("todo_write", "Write or update the todo list with tasks and their status. IMPORTANT: Keep todos to 5 items or fewer for focus and clarity. Only use for complex multi-step tasks.",
+	m.RegisterTool("todo_write", "Write or update the todo list with tasks and their status. Use statuses: pending, in_progress, completed (accepts 'done' as completed). Keep ≤5 items.",
 		[]message.ToolArgument{
 			{
 				Name:        "todos",
@@ -141,7 +166,43 @@ func (m *TodoToolManager) registerTodoTools() {
 		m.handleTodoWrite)
 }
 
-// TodoWrite handler - Claude Code style
+// registerTaskTools registers small compatibility stubs for task tools
+func (m *TodoToolManager) registerTaskTools() {
+	// exit_plan_mode: acknowledge plan and signal ready
+	m.RegisterTool("exit_plan_mode", "Acknowledge plan and exit planning mode (stub).",
+		[]message.ToolArgument{
+			{Name: "plan", Description: "Concise implementation plan", Required: true, Type: "string"},
+		}, m.handleExitPlanMode)
+
+	// Task: sub-agent launcher (stub)
+	m.RegisterTool("Task", "Launch a sub-agent (stub). Not supported; use Glob/Grep/Read/WebFetch directly.",
+		[]message.ToolArgument{
+			{Name: "description", Description: "Short task description", Required: true, Type: "string"},
+			{Name: "prompt", Description: "Detailed task for the agent", Required: true, Type: "string"},
+		}, m.handleTaskStub)
+}
+
+// handleExitPlanMode acknowledges a plan and indicates readiness to implement
+func (m *TodoToolManager) handleExitPlanMode(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	plan, _ := args["plan"].(string)
+	msg := "Plan acknowledged. Exiting plan mode; ready to implement."
+	if plan != "" {
+		msg = fmt.Sprintf("Plan acknowledged. Ready to implement.\n\nPlan:\n%s", plan)
+	}
+	return message.NewToolResultText(msg), nil
+}
+
+// handleTaskStub informs that the Task sub-agent is not supported
+func (m *TodoToolManager) handleTaskStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	desc, _ := args["description"].(string)
+	msg := "Task sub-agent is not supported in this build. Use Glob/Grep to search, Read/LS/Edit/Write for files, and WebFetch for URLs."
+	if desc != "" {
+		msg = fmt.Sprintf("Task not supported. Description: %q. Use Glob/Grep/Read/WebFetch directly.", desc)
+	}
+	return message.NewToolResultText(msg), nil
+}
+
+// TodoWrite handler
 func (m *TodoToolManager) handleTodoWrite(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	todosArg, ok := args["todos"]
 	if !ok {
@@ -195,17 +256,32 @@ func (m *TodoToolManager) handleTodoWrite(ctx context.Context, args message.Tool
 		return message.NewToolResultError("Too many todo items. Please limit to 5 items or fewer for better focus and management."), nil
 	}
 
-	// Validate todo items
-	for _, item := range todoItems {
+	// Normalize and validate todo items
+	inProgressCount := 0
+	for i, item := range todoItems {
 		if item.ID == "" || item.Content == "" {
 			return message.NewToolResultError("all todo items must have id and content"), nil
 		}
-		if item.Status != "pending" && item.Status != "in_progress" && item.Status != "done" {
-			return message.NewToolResultError(fmt.Sprintf("invalid status '%s', must be pending, in_progress, or done", item.Status)), nil
+		// Normalize status: map 'done' -> 'completed'
+		if item.Status == "done" {
+			item.Status = "completed"
+		}
+		if item.Status != "pending" && item.Status != "in_progress" && item.Status != "completed" {
+			return message.NewToolResultError(fmt.Sprintf("invalid status '%s', must be pending, in_progress, or completed", item.Status)), nil
+		}
+		if item.Status == "in_progress" {
+			inProgressCount++
 		}
 		if item.Priority != "high" && item.Priority != "medium" && item.Priority != "low" {
 			return message.NewToolResultError(fmt.Sprintf("invalid priority '%s', must be high, medium, or low", item.Priority)), nil
 		}
+		// write-back normalization
+		todoItems[i] = item
+	}
+
+	// Enforce at most one in_progress
+	if inProgressCount > 1 {
+		return message.NewToolResultError("Only one todo may be 'in_progress' at a time. Please adjust statuses and try again."), nil
 	}
 
 	// Update todo state
@@ -239,7 +315,7 @@ func (m *TodoToolManager) handleTodoWrite(ctx context.Context, args message.Tool
 	return message.NewToolResultText(summary), nil
 }
 
-// GetTodosForPrompt returns formatted todos for injection into prompt context (Claude Code-style)
+// GetTodosForPrompt returns formatted todos for injection into prompt context
 func (m *TodoToolManager) GetTodosForPrompt() string {
 	m.todoState.mu.RLock()
 	defer m.todoState.mu.RUnlock()
@@ -252,19 +328,23 @@ func (m *TodoToolManager) GetTodosForPrompt() string {
 	var result string
 	result += fmt.Sprintf("Current Todo List (%d items):\n\n", len(m.todoState.Items))
 
-	// Group by status for better readability
+	// Group by status for better readability (normalize legacy 'done' → 'completed')
 	statusGroups := map[string][]TodoItem{
 		"in_progress": {},
 		"pending":     {},
-		"done":        {},
+		"completed":   {},
 	}
 
 	for _, item := range m.todoState.Items {
-		statusGroups[item.Status] = append(statusGroups[item.Status], item)
+		status := item.Status
+		if status == "done" {
+			status = "completed"
+		}
+		statusGroups[status] = append(statusGroups[status], item)
 	}
 
-	// Display in_progress first, then pending, then done
-	for _, status := range []string{"in_progress", "pending", "done"} {
+	// Display in_progress first, then pending, then completed
+	for _, status := range []string{"in_progress", "pending", "completed"} {
 		items := statusGroups[status]
 		if len(items) == 0 {
 			continue
@@ -274,7 +354,11 @@ func (m *TodoToolManager) GetTodosForPrompt() string {
 		for _, item := range items {
 			// Use raw API format for LLM consumption (not display format with emojis)
 			// This ensures LLM uses correct format when calling todo_write tool
-			result += fmt.Sprintf("- [%s] %s - %s (ID: %s)\n", item.Priority, item.Content, item.Status, item.ID)
+			normalized := item.Status
+			if normalized == "done" {
+				normalized = "completed"
+			}
+			result += fmt.Sprintf("- [%s] %s - %s (ID: %s)\n", item.Priority, item.Content, normalized, item.ID)
 		}
 		result += "\n"
 	}
@@ -299,7 +383,16 @@ func (ts *TodoState) loadFromFile() error {
 		return err
 	}
 
-	return json.Unmarshal(data, ts)
+	if err := json.Unmarshal(data, ts); err != nil {
+		return err
+	}
+	// Normalize legacy statuses on load
+	for i := range ts.Items {
+		if ts.Items[i].Status == "done" {
+			ts.Items[i].Status = "completed"
+		}
+	}
+	return nil
 }
 
 func (ts *TodoState) saveToFile() error {

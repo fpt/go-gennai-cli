@@ -1,6 +1,6 @@
 # GENNAI CLI
 
-A CLI-based scenario-runner AI agent supporting multiple LLM backends, using ReAct (Reason and Act) pattern and MessageState with compaction to interact with tools, maintaining context.
+A CLI-based AI coding agent supporting multiple LLM backends, using ReAct (Reason and Act) pattern and MessageState with compaction to interact with tools, maintaining context.
 
 Default scenario focuses on coding tasks with ToDo management, various built-in tools, and user-configured tools via MCP client functionality.
 
@@ -9,11 +9,13 @@ The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a his
 ## Features
 
 - **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory
-- **Multiple LLM Backends**: Support for Ollama (local models), Anthropic Claude, OpenAI GPT, and Google Gemini
+- **Multiple LLM Backends**: Support for Ollama (gpt-oss), Anthropic Claude, OpenAI GPT, and Google Gemini (Experimental)
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for better performance
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
 - **MCP Server Support**: MCP Servers can be configured in settings.json
 - **Conversation State Management**: Automatic handling of conversation history and context
+- **Token Usage & Caching Foundations**: Per‑client token usage reporting (OpenAI supported) and provider‑native caching hints (session/prompt caching)
+- **Clean Output System**: ScenarioRunner streams thinking to an injected `io.Writer`; logs use Info/Debug intentions for console icons while file logs store structured `intention` fields.
 
 ## Quick Start
 
@@ -106,7 +108,7 @@ gennai --settings ./my-settings.json "Create a web server"
 **MCP Server Configuration:**
 - **stdio servers**: External processes communicating via stdin/stdout
 - **SSE servers**: HTTP Server-Sent Events endpoints
-- **Allowed Tools**: Limit context size by specifying only needed tools
+- **Allowed Tools (optional)**: Limit context size by specifying only needed tools. If omitted, all tools from the server are allowed.
 - **Environment Variables**: Set per-server environment
 
 **Example MCP Servers:**
@@ -123,13 +125,8 @@ This is an example of [godevmcp](https://github.com/fpt/go-dev-mcp).
         "type": "stdio",
         "command": "godevmcp",
         "args": ["serve"],
-        "allowed_tools": [
-          "tree_dir",
-          "search_local_files",
-          "read_godoc",
-          "search_godoc",
-          "search_within_godoc"
-        ]
+        // Optional: if omitted, all server tools are allowed
+        "allowed_tools": ["tree_dir", "search_local_files", "read_godoc"]
       }
     ]
   }
@@ -140,7 +137,7 @@ This is an example of [godevmcp](https://github.com/fpt/go-dev-mcp).
 - **Graceful Degradation**: Continues running if MCP servers fail to connect
 - **Per-Scenario Access**: Only scenarios that explicitly request MCP tools get access
 - **Multiple Server Support**: Connect to multiple MCP servers simultaneously
-- **Tool Filtering**: Use `allowed_tools` to reduce context size and improve performance
+- **Tool Filtering**: `allowed_tools` is optional; by default all tools are allowed. Use it to reduce context size and improve performance when needed.
 
 ## Supported Models
 
@@ -185,6 +182,14 @@ go run gennai/main.go
 
 ## Development
 
+### Output and Logging
+
+- **ScenarioRunner Writer**: The runner accepts an `io.Writer` and streams thinking output to it (REPL, tests, or gRPC).
+- **Unified Console Writer**: The global logger can target the same writer via `SetGlobalLoggerWithConsoleWriter` so agent logs and thinking share one sink.
+- **Intentions**: Only Info/Debug logs carry an `intention` tag (e.g., `tool`, `status`, `statistics`); Warn/Error rely purely on level.
+- **Console vs File Logs**: Console renders icons based on intention; file logs are plain with `intention=...` as structured metadata in `~/.gennai/logs/gennai.log`.
+- **Model-Facing Text**: Tool outputs returned to models avoid emojis and use plain PASS/FAIL/ERROR phrasing.
+
 For detailed development information, architecture details, and contributing guidelines, see:
 
 **[📖 Development Guide](doc/DEVELOPMENT.md)**
@@ -192,11 +197,18 @@ For detailed development information, architecture details, and contributing gui
 This includes:
 - Architecture overview and design patterns
 - Structured output system with generics
+- Token usage reporting and provider‑native caching hooks
 - Testing and code quality guidelines
 - Project structure and contribution workflow
 - Model capabilities and integration testing
 
 ## ⚠️ Important Notices
+
+### Token Usage & Provider‑Native Caching
+- GENNAI exposes a foundation for per‑client token usage monitoring and provider‑native caching hints (no local cache layer).
+- OpenAI (Responses API) currently reports token usage; other clients will add support when their SDKs expose usage.
+- Provider‑side prompt caching (e.g., OpenAI Prompt Caching) can be enabled via client options when supported by the SDK.
+  - Reference: https://platform.openai.com/docs/guides/prompt-caching
 
 ### Responsible Use
 - This tool is provided for research and development purposes
@@ -227,4 +239,3 @@ This software is provided "as is" under the Apache 2.0 License without warranty 
 ## License
 
 This project is licensed under the Apache 2.0 License.
-

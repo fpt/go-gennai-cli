@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 )
 
 // Default maximum iterations for agents
-const DefaultAgentMaxIterations = 10
+const DefaultAgentMaxIterations = 30
 
 // Settings represents the main application settings
 type Settings struct {
@@ -277,9 +278,9 @@ func createSettingsFileAtPath(settingsPath string) (*Settings, error) {
 		return settings, nil // Return defaults if file writing fails
 	}
 
-	// Print success message
-	fmt.Printf("📄 Created default settings file: %s\n", settingsPath)
-	fmt.Printf("💡 You can edit this file to customize your configuration\n")
+	// Log success message
+	pkgLogger.NewComponentLogger("settings").InfoWithIntention(pkgLogger.IntentionConfig, "Created default settings file", "path", settingsPath)
+	pkgLogger.NewComponentLogger("settings").InfoWithIntention(pkgLogger.IntentionStatus, "You can edit this file to customize your configuration")
 
 	return settings, nil
 }

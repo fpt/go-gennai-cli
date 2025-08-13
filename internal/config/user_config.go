@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 )
 
 // UserConfig manages per-user configuration and data directories
@@ -78,7 +80,7 @@ func (c *UserConfig) GetProjectDataDir(projectPath string) (string, error) {
 		info := fmt.Sprintf("Project Path: %s\nCreated: %s\n", absPath, getCurrentTimestamp())
 		if err := os.WriteFile(infoFile, []byte(info), 0644); err != nil {
 			// Non-fatal error, just log it
-			fmt.Printf("Warning: failed to create project info file: %v\n", err)
+			pkgLogger.NewComponentLogger("user-config").WarnWithIntention(pkgLogger.IntentionWarning, "Failed to create project info file", "error", err)
 		}
 	}
 
@@ -105,8 +107,16 @@ func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "session.json"), nil
 }
 
+// GetProjectHistoryFile returns the readline history file path for a specific project
+func (c *UserConfig) GetProjectHistoryFile(projectPath string) (string, error) {
+	projectDir, err := c.GetProjectDataDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, "history.txt"), nil
+}
 
-// generateProjectHash creates a safe directory name from a project path (Claude Code-style)
+// generateProjectHash creates a safe directory name from a project path
 func generateProjectHash(projectPath string) string {
 	// Claude Code uses full path with slashes replaced by dashes
 	// e.g., /Users/youichi.fujimoto/Documents/scratch/go-llama-code
@@ -132,32 +142,6 @@ func generateProjectHash(projectPath string) string {
 	}
 
 	return result
-}
-
-// sanitizeFilename removes problematic characters from filenames
-func sanitizeFilename(name string) string {
-	// Replace problematic characters with safe ones
-	result := ""
-	for _, r := range name {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
-			result += string(r)
-		case r == '-' || r == '_' || r == '.':
-			result += string(r)
-		default:
-			result += "_"
-		}
-	}
-	return result
-}
-
-// simpleHash creates a simple hash of a string
-func simpleHash(s string) string {
-	hash := uint32(0)
-	for i := 0; i < len(s); i++ {
-		hash = hash*31 + uint32(s[i])
-	}
-	return fmt.Sprintf("%08x", hash)
 }
 
 // getCurrentTimestamp returns the current timestamp as a string

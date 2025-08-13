@@ -2,140 +2,43 @@ package openai
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/message"
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/shared"
+	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/responses"
 )
-
-// convertToolsToOpenAI converts domain tools to OpenAI function format
-func convertToolsToOpenAI(tools map[message.ToolName]message.Tool) []openai.ChatCompletionToolParam {
-	var openaiTools []openai.ChatCompletionToolParam
-
-	// Convert domain tools to OpenAI format
-	for _, tool := range tools {
-		// Create properties from tool arguments
-		properties := make(map[string]interface{})
-		var required []string
-
-		for _, arg := range tool.Arguments() {
-			// Convert tool argument to OpenAI property schema
-			property := convertArgumentToProperty(arg)
-			properties[string(arg.Name)] = property
-
-			if arg.Required {
-				required = append(required, string(arg.Name))
-			}
-		}
-
-		// Ensure required is never nil (OpenAI expects an array, even if empty)
-		if required == nil {
-			required = []string{}
-		}
-
-		// Create OpenAI function parameters
-		params := shared.FunctionParameters{
-			"type":       "object",
-			"properties": properties,
-		}
-
-		// Only add required if we have required fields
-		if len(required) > 0 {
-			params["required"] = required
-		}
-
-		// Create OpenAI function tool
-		openaiTool := openai.ChatCompletionToolParam{
-			Type: "function",
-			Function: shared.FunctionDefinitionParam{
-				Name:        string(tool.Name()),
-				Description: openai.String(tool.Description().String()),
-				Parameters:  params,
-			},
-		}
-
-		openaiTools = append(openaiTools, openaiTool)
-	}
-
-	return openaiTools
-}
-
-// convertToolChoiceToOpenAI converts domain ToolChoice to OpenAI ChatCompletionToolChoiceOptionUnionParam
-func convertToolChoiceToOpenAI(toolChoice domain.ToolChoice) *openai.ChatCompletionToolChoiceOptionUnionParam {
-	switch toolChoice.Type {
-	case domain.ToolChoiceAuto:
-		param := openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
-		}
-		return &param
-	case domain.ToolChoiceAny:
-		param := openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
-		}
-		return &param
-	case domain.ToolChoiceTool:
-		// Create a specific tool choice using ChatCompletionNamedToolChoice
-		functionParam := openai.ChatCompletionNamedToolChoiceFunctionParam{
-			Name: string(toolChoice.Name),
-		}
-		namedChoice := openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(functionParam)
-		return &namedChoice
-	case domain.ToolChoiceNone:
-		param := openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone)),
-		}
-		return &param
-	default:
-		// Default to auto
-		param := openai.ChatCompletionToolChoiceOptionUnionParam{
-			OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoAuto)),
-		}
-		return &param
-	}
-}
-
-// toOpenAIMessages converts domain messages to OpenAI format, handling tool calls and results
-func toOpenAIMessages(messages []message.Message) []openai.ChatCompletionMessageParamUnion {
-	var openaiMessages []openai.ChatCompletionMessageParamUnion
-
-	for _, msg := range messages {
-		switch msg.Type() {
-		case message.MessageTypeUser:
-			openaiMessages = append(openaiMessages, openai.UserMessage(msg.Content()))
-		case message.MessageTypeAssistant:
-			openaiMessages = append(openaiMessages, openai.AssistantMessage(msg.Content()))
-		case message.MessageTypeSystem:
-			openaiMessages = append(openaiMessages, openai.SystemMessage(msg.Content()))
-		case message.MessageTypeToolCall:
-			// For conversation history, represent tool calls as assistant messages
-			// The actual tool calling happens via the OpenAI native API
-			if toolCallMsg, ok := msg.(interface {
-				ToolName() message.ToolName
-				ToolArguments() message.ToolArgumentValues
-			}); ok {
-				argsJSON := convertToolArgsToJSON(toolCallMsg.ToolArguments())
-				toolCallText := "[Called tool: " + string(toolCallMsg.ToolName()) + "(" + argsJSON + ")]"
-				openaiMessages = append(openaiMessages, openai.AssistantMessage(toolCallText))
-			}
-		case message.MessageTypeToolResult:
-			// Represent tool results as user messages (as if the user provided the information)
-			if toolResultMsg, ok := msg.(interface{ Content() string }); ok {
-				resultText := "[Tool result: " + toolResultMsg.Content() + "]"
-				openaiMessages = append(openaiMessages, openai.UserMessage(resultText))
-			}
-		}
-	}
-
-	return openaiMessages
-}
 
 // convertArgumentToProperty converts a ToolArgument to OpenAI property schema
 // This provides generic JSON schema inference from ToolArgument metadata
 func convertArgumentToProperty(arg message.ToolArgument) map[string]interface{} {
+	// Ensure we have a valid JSON Schema type
+	argType := strings.TrimSpace(arg.Type)
+	// Handle various invalid type cases
+	if argType == "" || argType == "None" || argType == "null" || argType == "undefined" {
+		argType = "string" // Default to string for invalid types
+	}
+
+	// Validate against common JSON Schema types
+	validTypes := map[string]bool{
+		"string":  true,
+		"number":  true,
+		"integer": true,
+		"boolean": true,
+		"array":   true,
+		"object":  true,
+	}
+
+	if !validTypes[argType] {
+		// If it's not a valid JSON Schema type, default to string
+		argType = "string"
+	}
+
 	property := map[string]interface{}{
-		"type":        arg.Type,
+		"type":        argType,
 		"description": arg.Description.String(),
 	}
 
@@ -343,4 +246,90 @@ func convertToolArgsToJSON(args message.ToolArgumentValues) string {
 	}
 
 	return string(jsonBytes)
+}
+
+// convertTools converts domain tools to Responses API ToolUnionParam format
+func convertTools(tools map[message.ToolName]message.Tool) []responses.ToolUnionParam {
+	var responsesTools []responses.ToolUnionParam
+
+	// Convert domain tools to Responses API format
+	for _, tool := range tools {
+		// Create properties from tool arguments
+		properties := make(map[string]any)
+		var required []string
+
+		for _, arg := range tool.Arguments() {
+			// Convert tool argument to property schema
+			property := convertArgumentToProperty(arg)
+			properties[string(arg.Name)] = property
+
+			// Add to required if the argument is required
+			if arg.Required {
+				required = append(required, string(arg.Name))
+			}
+		}
+
+		// Create proper JSON Schema object
+		schema := map[string]any{
+			"type":       "object",
+			"properties": properties,
+		}
+
+		// Add required array if we have required fields
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+
+		// Debug: Print tool schema
+		if os.Getenv("DEBUG_TOOLS") == "1" {
+			fmt.Printf("DEBUG: Tool %s schema: %+v\n", string(tool.Name()), schema)
+		}
+
+		// Create function tool using Responses API helper
+		toolParam := responses.ToolParamOfFunction(
+			string(tool.Name()),
+			schema,
+			false, // strict - set to false for now, could be configurable
+		)
+
+		// Set description if available
+		if desc := tool.Description().String(); desc != "" {
+			// Note: There doesn't seem to be a direct way to set description
+			// in the helper function, so we might need to set it after creation
+			// or use a more direct approach
+		}
+
+		responsesTools = append(responsesTools, toolParam)
+	}
+
+	return responsesTools
+}
+
+// convertToolChoice converts domain ToolChoice to Responses API format
+func convertToolChoice(toolChoice domain.ToolChoice) *responses.ResponseNewParamsToolChoiceUnion {
+	switch toolChoice.Type {
+	case domain.ToolChoiceAuto:
+		return &responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		}
+	case domain.ToolChoiceAny:
+		return &responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
+		}
+	case domain.ToolChoiceTool:
+		// For specific tool choice, we'll use required mode for now
+		// TODO: Implement specific function tool choice when available in API
+		return &responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
+		}
+	case domain.ToolChoiceNone:
+		return &responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone),
+		}
+	default:
+		// Default to auto
+		return &responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		}
+	}
 }

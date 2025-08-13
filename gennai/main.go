@@ -4,13 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
-	"github.com/fpt/go-gennai-cli/internal/agent"
+	"github.com/fpt/go-gennai-cli/internal/app"
 	"github.com/fpt/go-gennai-cli/internal/config"
 	"github.com/fpt/go-gennai-cli/internal/mcp"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -20,20 +18,7 @@ import (
 	"github.com/fpt/go-gennai-cli/pkg/client/openai"
 	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
-	"github.com/manifoldco/promptui"
 )
-
-// scenarioPathsFlag implements flag.Value for handling multiple scenario paths
-type scenarioPathsFlag []string
-
-func (s *scenarioPathsFlag) String() string {
-	return strings.Join(*s, ",")
-}
-
-func (s *scenarioPathsFlag) Set(value string) error {
-	*s = append(*s, value)
-	return nil
-}
 
 // resolveStringFlag returns the non-empty value, preferring short flag over long flag
 func resolveStringFlag(shortVal, longVal string) string {
@@ -59,7 +44,7 @@ func printUsage() {
 	fmt.Println("  gennai -s code \"Fix compilation errors\"   # Code scenario")
 	fmt.Println("  gennai -b anthropic \"Analyze this code\"  # Use Anthropic backend")
 	fmt.Println("  gennai -f prompts.txt                     # Multi-turn from file (no memory)")
-	fmt.Println("  gennai --custom-scenarios ./my.yaml      # Use additional scenarios")
+	// Custom scenario CLI option removed
 	fmt.Println("  gennai -v \"Debug this issue\"             # Enable verbose debug logging")
 	fmt.Println("  gennai -l                                # Show conversation history")
 	fmt.Println()
@@ -77,7 +62,6 @@ func main() {
 	var settingsPath = flag.String("settings", "", "Path to settings file")
 	var scenario = flag.String("s", "code", "Scenario to use (default: code)")
 	var scenarioLong = flag.String("scenario", "code", "Scenario to use (default: code)")
-	var scenarioPaths scenarioPathsFlag
 	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
 	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
 	var promptFile = flag.String("f", "", "File containing multi-turn prompts separated by '----' (no memory between turns)")
@@ -86,8 +70,7 @@ func main() {
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 
-	// Custom flag for multiple scenario paths
-	flag.Var(&scenarioPaths, "custom-scenarios", "Additional scenario file or directory (can be used multiple times)")
+	// Custom scenarios option removed
 
 	// Custom usage function
 	flag.Usage = func() {
@@ -128,15 +111,14 @@ func main() {
 	if resolvedVerbose {
 		logLevel = "debug"
 	}
-	// Update global logger level so all component loggers use the new level
-	pkgLogger.SetGlobalLogLevel(pkgLogger.LogLevel(logLevel))
-	logger := pkgLogger.NewLogger(pkgLogger.LogLevel(logLevel))
+	// Use a single writer for console output and ScenarioRunner output
+	out := os.Stdout
+	pkgLogger.SetGlobalLoggerWithConsoleWriter(pkgLogger.LogLevel(logLevel), out)
+	logger := pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevel(logLevel), out)
 
 	// Log the current log level for debugging
 	if resolvedVerbose {
-		logger.DebugWithIcon("📊", "Verbose logging enabled", "log_level", logLevel)
-	} else {
-		logger.InfoWithIcon("📊", "Standard logging enabled", "log_level", logLevel)
+		logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Verbose logging enabled", "log_level", logLevel)
 	}
 
 	// Convert scenario to uppercase for case-insensitive matching with YAML files
@@ -152,7 +134,7 @@ func main() {
 
 	// Validate settings
 	if err := config.ValidateSettings(settings); err != nil {
-		logger.ErrorWithIcon("❌", "Settings validation failed", "error", err)
+		logger.Error("Settings validation failed", "error", err)
 		os.Exit(1)
 	}
 
@@ -162,25 +144,25 @@ func main() {
 	case "anthropic", "claude":
 		llmClient, err = anthropic.NewAnthropicClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
 		if err != nil {
-			logger.ErrorWithIcon("❌", "Failed to create Anthropic client", "error", err)
+			logger.Error("Failed to create Anthropic client", "error", err)
 			os.Exit(1)
 		}
 	case "openai":
-		llmClient, err = openai.NewOpenAIClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
+		llmClient, err = openai.NewOpenAIClient(settings.LLM.Model, settings.LLM.MaxTokens)
 		if err != nil {
-			logger.ErrorWithIcon("❌", "Failed to create OpenAI client", "error", err)
+			logger.Error("Failed to create OpenAI client", "error", err)
 			os.Exit(1)
 		}
 	case "gemini":
 		llmClient, err = gemini.NewGeminiClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
 		if err != nil {
-			logger.ErrorWithIcon("❌", "Failed to create Gemini client", "error", err)
+			logger.Error("Failed to create Gemini client", "error", err)
 			os.Exit(1)
 		}
 	default:
 		// For Ollama, check if model is in known list, if not, test capability
 		if !ollama.IsModelInKnownList(settings.LLM.Model) {
-			logger.WarnWithIcon("⚠️", "Model not in known capabilities list, testing tool calling capability",
+			logger.Warn("Model not in known capabilities list, testing tool calling capability",
 				"model", settings.LLM.Model)
 
 			// Test model capability with a 30-second timeout
@@ -189,20 +171,20 @@ func main() {
 
 			hasToolCapability, testErr := ollama.DynamicCapabilityCheck(testCtx, settings.LLM.Model, false)
 			if testErr != nil {
-				logger.WarnWithIcon("⚠️", "Failed to test model capability, proceeding without tool support",
+				logger.Warn("Failed to test model capability, proceeding without tool support",
 					"model", settings.LLM.Model, "error", testErr)
 			} else if !hasToolCapability {
-				logger.WarnWithIcon("⚠️", "Model does not support tool calling - limited functionality",
+				logger.Warn("Model does not support tool calling - limited functionality",
 					"model", settings.LLM.Model, "suggestion", "consider using 'gpt-oss:latest'")
 			} else {
-				logger.InfoWithIcon("✅", "Model supports tool calling, proceeding with full functionality",
+				logger.InfoWithIntention(pkgLogger.IntentionSuccess, "Model supports tool calling, proceeding with full functionality",
 					"model", settings.LLM.Model)
 			}
 		}
 
 		llmClient, err = ollama.NewOllamaClient(settings.LLM.Model, settings.LLM.MaxTokens, settings.LLM.Thinking)
 		if err != nil {
-			logger.ErrorWithIcon("❌", "Failed to create Ollama client", "error", err)
+			logger.Error("Failed to create Ollama client", "error", err)
 			os.Exit(1)
 		}
 	}
@@ -212,7 +194,7 @@ func main() {
 	if workingDirectory != "" {
 		// Validate that the directory exists
 		if _, err := os.Stat(workingDirectory); err != nil {
-			logger.ErrorWithIcon("❌", "Working directory does not exist",
+			logger.Error("Working directory does not exist",
 				"directory", workingDirectory, "error", err)
 			os.Exit(1)
 		}
@@ -232,7 +214,7 @@ func main() {
 	}
 
 	// Initialize the scenario runner with optional MCP tool manager and additional scenarios
-	var a *agent.ScenarioRunner
+	var a *app.ScenarioRunner
 	// Skip session restoration for file mode (-f flag) to ensure clean isolated tests
 	skipSessionRestore := (*promptFile != "")
 	// Determine if we're in interactive mode (affects project directory usage)
@@ -248,26 +230,15 @@ func main() {
 			mcpToolManagers[serverName] = toolManager
 		}
 
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
-		stats := mcpIntegration.GetStats()
-		fmt.Printf("✅ MCP Integration: %d servers connected, %d tools available\n", stats.ConnectedServers, stats.TotalTools)
-
-		// Debug: List all available tools from the tool manager
-		allTools := toolManager.GetTools()
-		fmt.Printf("🔧 Debug: Tool Manager has %d tools loaded\n", len(allTools))
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode)
 	} else {
 		mcpToolManagers := make(map[string]domain.ToolManager)
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode)
 
 		// Note: SimpleToolManager removed - tools now managed by specialized managers
 	}
 
-	// Report scenario loading
-	if len(scenarioPaths) > 0 {
-		fmt.Printf("📋 Additional scenarios loaded from: %v\n", scenarioPaths)
-	} else {
-		fmt.Printf("📋 Using built-in scenarios (use --scenarios to add custom scenarios)\n")
-	}
+	// Using built-in scenarios only
 
 	// Handle special command line options
 	if resolvedShowLog {
@@ -283,9 +254,6 @@ func main() {
 		}
 		return
 	}
-
-	// Show initial configuration
-	a.PrintPhaseModels()
 
 	// Show which scenario is being used
 	fmt.Printf("📋 Using scenario: %s (%s)\n", resolvedScenario, internalScenario)
@@ -303,11 +271,11 @@ func main() {
 		executeCommand(ctx, a, userInput, internalScenario)
 	} else {
 		// Interactive mode: start REPL
-		startInteractiveMode(ctx, a, internalScenario)
+		app.StartInteractiveMode(ctx, a, internalScenario)
 	}
 }
 
-func executeCommand(ctx context.Context, a *agent.ScenarioRunner, userInput string, scenario string) {
+func executeCommand(ctx context.Context, a *app.ScenarioRunner, userInput string, scenario string) {
 	fmt.Print("\n")
 
 	var response message.Message
@@ -321,10 +289,14 @@ func executeCommand(ctx context.Context, a *agent.ScenarioRunner, userInput stri
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Response:\n%+v\n", response.Content())
+	// Print plain header + content via ScenarioRunner writer
+	w := a.OutWriter()
+	model := a.GetLLMClient().ModelID()
+	app.WriteResponseHeader(w, model, false)
+	fmt.Fprintln(w, response.Content())
 }
 
-func executeMultiTurnFile(ctx context.Context, a *agent.ScenarioRunner, filePath string, scenario string) {
+func executeMultiTurnFile(ctx context.Context, a *app.ScenarioRunner, filePath string, scenario string) {
 	// Read the file content
 	content, err := os.ReadFile(filePath)
 	if err != nil {
@@ -363,305 +335,14 @@ func executeMultiTurnFile(ctx context.Context, a *agent.ScenarioRunner, filePath
 			continue
 		}
 
-		fmt.Printf("✅ Response:\n%s\n", response.Content())
-		fmt.Printf("%s\n\n", strings.Repeat("─", 60))
+		w := a.OutWriter()
+		model := a.GetLLMClient().ModelID()
+		app.WriteResponseHeader(w, model, false)
+		fmt.Fprintln(w, response.Content())
+		fmt.Fprintf(w, "%s\n\n", strings.Repeat("─", 60))
 	}
 
 	fmt.Println("🏁 All turns completed.")
-}
-
-func startInteractiveMode(ctx context.Context, a *agent.ScenarioRunner, scenario string) {
-	// Configure readline with enhanced features
-	config := &readline.Config{
-		Prompt:              "> ",
-		HistoryFile:         "/tmp/gennai_history",
-		AutoComplete:        createAutoCompleter(),
-		InterruptPrompt:     "^C",
-		EOFPrompt:           "exit",
-		HistorySearchFold:   true,
-		FuncFilterInputRune: filterInput,
-	}
-
-	// Create readline instance
-	rl, err := readline.NewEx(config)
-	if err != nil {
-		fmt.Printf("❌ Failed to initialize interactive mode: %v\n", err)
-		fmt.Println("💡 Please use one-shot mode instead: gennai \"your request here\"")
-		return
-	}
-	defer rl.Close()
-
-	fmt.Println("\n🚀 Welcome to Gennai Interactive Mode!")
-	fmt.Println("💬 Commands start with '/', everything else goes to the AI agent!")
-	fmt.Println("⌨️ Use arrow keys to navigate, Ctrl+R for history search, Tab for completion.")
-	fmt.Println(strings.Repeat("=", 60))
-
-	// Show conversation preview if there are existing messages
-	conversationPreview := a.GetConversationPreview(6) // Show last 6 messages
-	if conversationPreview != "" {
-		fmt.Print("\n")
-		fmt.Print(conversationPreview)
-		fmt.Println()
-	}
-
-	for {
-		fmt.Print("\n") // Add newline before prompt
-		line, err := rl.Readline()
-		if err == readline.ErrInterrupt {
-			if len(line) == 0 {
-				break
-			} else {
-				continue
-			}
-		} else if err == io.EOF {
-			break
-		}
-
-		userInput := strings.TrimSpace(line)
-
-		if userInput == "" {
-			continue
-		}
-
-		// Handle commands that start with /
-		if strings.HasPrefix(userInput, "/") {
-			if handleSlashCommand(userInput, a) {
-				break // Command requested exit
-			}
-			continue // Command was handled, get next input
-		}
-
-		// Process the user input with ReAct agent
-		// Processing user input
-
-		var response message.Message
-		var invokeErr error
-
-		// Always use the CLI-specified scenario (defaults to "coding")
-		response, invokeErr = a.Invoke(ctx, userInput, scenario)
-
-		if invokeErr != nil {
-			fmt.Printf("❌ Error: %v\n", invokeErr)
-			continue
-		}
-
-		fmt.Printf("✅ Response:\n%+v\n", response.Content())
-	}
-}
-
-// SlashCommand represents a command that starts with /
-type SlashCommand struct {
-	Name        string
-	Description string
-	Handler     func(*agent.ScenarioRunner) bool // Returns true if should exit
-}
-
-// getSlashCommands returns all available slash commands
-func getSlashCommands() []SlashCommand {
-	return []SlashCommand{
-		{
-			Name:        "help",
-			Description: "Show available commands and usage information",
-			Handler: func(a *agent.ScenarioRunner) bool {
-				showInteractiveHelp()
-				return false
-			},
-		},
-		{
-			Name:        "clear",
-			Description: "Clear conversation history and start fresh",
-			Handler: func(a *agent.ScenarioRunner) bool {
-				a.ClearHistory()
-				fmt.Println("🧹 Conversation history cleared.")
-				return false
-			},
-		},
-		{
-			Name:        "status",
-			Description: "Show current session status and statistics",
-			Handler: func(a *agent.ScenarioRunner) bool {
-				showStatus(a)
-				return false
-			},
-		},
-		{
-			Name:        "quit",
-			Description: "Exit the interactive session",
-			Handler: func(a *agent.ScenarioRunner) bool {
-				fmt.Println("👋 Goodbye!")
-				return true
-			},
-		},
-		{
-			Name:        "exit",
-			Description: "Exit the interactive session (alias for quit)",
-			Handler: func(a *agent.ScenarioRunner) bool {
-				fmt.Println("👋 Goodbye!")
-				return true
-			},
-		},
-	}
-}
-
-// handleSlashCommand processes commands that start with /
-// Returns true if the command requests program exit, false otherwise
-func handleSlashCommand(input string, a *agent.ScenarioRunner) bool {
-	// Check if this is just "/" - show command selector
-	if strings.TrimSpace(input) == "/" {
-		return showCommandSelector(a)
-	}
-
-	parts := strings.Fields(input)
-	if len(parts) == 0 {
-		return false
-	}
-
-	commandName := strings.TrimPrefix(parts[0], "/")
-	commands := getSlashCommands()
-
-	// Find and execute the command
-	for _, cmd := range commands {
-		if cmd.Name == commandName {
-			return cmd.Handler(a)
-		}
-	}
-
-	// Command not found - show available commands
-	fmt.Printf("❌ Unknown command: /%s\n", commandName)
-	fmt.Println("💡 Available commands:")
-	for _, cmd := range commands {
-		fmt.Printf("  /%s - %s\n", cmd.Name, cmd.Description)
-	}
-	fmt.Println("\n💡 Tip: Type just '/' to see an interactive command selector!")
-	return false
-}
-
-// showCommandSelector shows an interactive command selector using promptui
-func showCommandSelector(a *agent.ScenarioRunner) bool {
-	commands := getSlashCommands()
-
-	templates := &promptui.SelectTemplates{
-		Label:    "{{ . }}?",
-		Active:   "▸ {{ .Name | cyan }} - {{ .Description | faint }}",
-		Inactive: "  {{ .Name | cyan }} - {{ .Description | faint }}",
-		Selected: "{{ .Name | red | cyan }}",
-		Details: `
---------- Command Details ----------
-{{ "Name:" | faint }}	{{ .Name }}
-{{ "Description:" | faint }}	{{ .Description }}`,
-	}
-
-	searcher := func(input string, index int) bool {
-		command := commands[index]
-		name := strings.ReplaceAll(strings.ToLower(command.Name), " ", "")
-		input = strings.ReplaceAll(strings.ToLower(input), " ", "")
-
-		return strings.Contains(name, input)
-	}
-
-	prompt := promptui.Select{
-		Label:     "Choose a command",
-		Items:     commands,
-		Templates: templates,
-		Size:      10,
-		Searcher:  searcher,
-	}
-
-	i, _, err := prompt.Run()
-	if err != nil {
-		if err == promptui.ErrInterrupt {
-			fmt.Println("\nCancelled.")
-			return false
-		}
-		fmt.Printf("Command selection failed: %v\n", err)
-		return false
-	}
-
-	// Execute the selected command
-	return commands[i].Handler(a)
-}
-
-// showStatus displays current session status
-func showStatus(a *agent.ScenarioRunner) {
-	fmt.Println("\n📊 Session Status:")
-
-	// Get conversation preview to count messages
-	preview := a.GetConversationPreview(100) // Get many to count all
-	if preview != "" {
-		// Simple heuristic to count messages by looking for message patterns
-		userMsgCount := strings.Count(preview, "👤 You:")
-		assistantMsgCount := strings.Count(preview, "🤖 Assistant:")
-		fmt.Printf("  💬 Messages: %d from you, %d from assistant\n", userMsgCount, assistantMsgCount)
-	} else {
-		fmt.Println("  💬 Messages: No conversation history")
-	}
-
-	fmt.Println("  🔧 Tools: Available and active")
-	fmt.Println("  🧠 Agent: ReAct with scenario planning")
-	fmt.Println("  ⚡ Status: Ready for requests")
-}
-
-// createAutoCompleter creates an autocompletion function for readline
-func createAutoCompleter() *readline.PrefixCompleter {
-	commands := getSlashCommands()
-	var pcItems []readline.PrefixCompleterInterface
-
-	// Add slash commands dynamically
-	for _, cmd := range commands {
-		pcItems = append(pcItems, readline.PcItem("/"+cmd.Name))
-	}
-
-	// Add the interactive slash command selector
-	pcItems = append(pcItems, readline.PcItem("/"))
-
-	// Add common request patterns
-	commonPatterns := []string{
-		"Create a", "Analyze the", "Write unit tests for", "List files in",
-		"Run go build", "Fix any errors", "Explain how", "Show me",
-		"Generate", "Debug", "Test", "Refactor",
-	}
-
-	for _, pattern := range commonPatterns {
-		pcItems = append(pcItems, readline.PcItem(pattern))
-	}
-
-	return readline.NewPrefixCompleter(pcItems...)
-}
-
-// filterInput filters input runes to handle special keys
-func filterInput(r rune) (rune, bool) {
-	switch r {
-	case readline.CharCtrlZ:
-		return r, false
-	}
-	return r, true
-}
-
-func showInteractiveHelp() {
-	commands := getSlashCommands()
-
-	fmt.Println("\n📚 Interactive Commands:")
-	fmt.Println("  /                - Show interactive command selector 🆕")
-	for _, cmd := range commands {
-		fmt.Printf("  /%-15s - %s\n", cmd.Name, cmd.Description)
-	}
-
-	fmt.Println("\n⌨️  Enhanced Features:")
-	fmt.Println("  Ctrl+C           - Cancel current input")
-	fmt.Println("  Ctrl+R           - Search command history")
-	fmt.Println("  Tab              - Auto-complete commands and patterns")
-	fmt.Println("  Arrow keys       - Navigate input and history")
-	fmt.Println("  /                - Interactive command selector with search!")
-
-	fmt.Println("\n💡 Example requests:")
-	fmt.Println("  > Create a HTTP server with health check")
-	fmt.Println("  > Analyze the current codebase structure")
-	fmt.Println("  > Write unit tests for the ScenarioRunner")
-	fmt.Println("  > List files in the current directory")
-	fmt.Println("  > Run go build and fix any errors")
-
-	fmt.Println("\n✨ New: Type just '/' to see a beautiful command selector!")
-	fmt.Println("🔧 The agent will automatically use tools when needed!")
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers
@@ -689,7 +370,7 @@ func initializeMCP(ctx context.Context, mcpSettings config.MCPSettings, logger *
 		}
 
 		if err := integration.AddServer(ctx, serverConfig); err != nil {
-			logger.WarnWithIcon("⚠️", "Failed to connect to MCP server",
+			logger.Warn("Failed to connect to MCP server",
 				"server", serverConfig.Name, "error", err)
 			failedServers = append(failedServers, serverConfig.Name)
 		} else {
@@ -699,16 +380,16 @@ func initializeMCP(ctx context.Context, mcpSettings config.MCPSettings, logger *
 
 	// Log connection results
 	if len(connectedServers) > 0 {
-		logger.InfoWithIcon("✅", "Successfully connected to MCP servers",
+		logger.DebugWithIntention(pkgLogger.IntentionSuccess, "Successfully connected to MCP servers",
 			"servers", connectedServers)
 	}
 	if len(failedServers) > 0 {
-		logger.WarnWithIcon("⚠️", "Failed to connect to MCP servers",
+		logger.Warn("Failed to connect to MCP servers",
 			"servers", failedServers)
 	}
 
 	if len(connectedServers) == 0 {
-		logger.WarnWithIcon("⚠️", "No MCP servers connected")
+		logger.Warn("No MCP servers connected")
 		return nil
 	}
 

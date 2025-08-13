@@ -1,8 +1,11 @@
 package logger
 
 import (
+	"context"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 )
 
 // LogLevel represents the available log levels
@@ -22,6 +25,11 @@ type Logger struct {
 
 // NewLogger creates a new structured logger with the specified level
 func NewLogger(level LogLevel) *Logger {
+	return NewLoggerWithConsoleWriter(level, os.Stderr)
+}
+
+// NewLoggerWithConsoleWriter builds a logger that writes console output to the given writer
+func NewLoggerWithConsoleWriter(level LogLevel, consoleWriter io.Writer) *Logger {
 	var slogLevel slog.Level
 
 	switch level {
@@ -37,22 +45,17 @@ func NewLogger(level LogLevel) *Logger {
 		slogLevel = slog.LevelInfo // Default to info
 	}
 
-	// Create a text handler with custom options
-	opts := &slog.HandlerOptions{
-		Level: slogLevel,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// Customize time format for readability
-			if a.Key == slog.TimeKey {
-				return slog.Attr{
-					Key:   "time",
-					Value: slog.StringValue(a.Value.Time().Format("15:04:05")),
-				}
-			}
-			return a
-		},
+	// Console: plain, no time/level/msg labels
+	if consoleWriter == nil {
+		consoleWriter = os.Stderr
 	}
+	consoleHandler := newPlainHandler(consoleWriter, slogLevel)
 
-	handler := slog.NewTextHandler(os.Stderr, opts)
+	// File: structured text with time and level
+	fileHandler := newFileTextHandler(slogLevel)
+
+	// Fan out to both console and file
+	handler := newMultiHandler(consoleHandler, fileHandler)
 	logger := slog.New(handler)
 
 	return &Logger{Logger: logger}
@@ -82,25 +85,37 @@ func (l *Logger) WithSession(sessionID string) *Logger {
 	}
 }
 
+// LogWithIntention logs a message at the provided level with an intention tag.
+// It prepends a console-friendly icon and adds the structured key "intention".
+func (l *Logger) LogWithIntention(level slog.Level, intention Intention, msg string, args ...any) {
+	// Do not modify message for file logs; console handler adds icon.
+	// Attach intention as structured attribute for files/consumers
+	kv := append([]any{"intention", string(intention)}, args...)
+	l.Logger.Log(context.Background(), level, msg, kv...)
+}
+
+func (l *Logger) InfoWithIntention(intention Intention, msg string, args ...any) {
+	l.LogWithIntention(slog.LevelInfo, intention, msg, args...)
+}
+
+// Warnings and errors do not carry intentions; intention is only for info/debug
+func (l *Logger) WarnWithIntention(_ Intention, msg string, args ...any) {
+	l.Warn(msg, args...)
+}
+
+func (l *Logger) ErrorWithIntention(_ Intention, msg string, args ...any) {
+	l.Error(msg, args...)
+}
+
+func (l *Logger) DebugWithIntention(intention Intention, msg string, args ...any) {
+	l.LogWithIntention(slog.LevelDebug, intention, msg, args...)
+}
+
 // InfoWithIcon logs info message with emoji for user-friendly output
-func (l *Logger) InfoWithIcon(icon string, msg string, args ...any) {
-	l.Info(icon+" "+msg, args...)
-}
-
-// WarnWithIcon logs warning message with emoji for user-friendly output
-func (l *Logger) WarnWithIcon(icon string, msg string, args ...any) {
-	l.Warn(icon+" "+msg, args...)
-}
-
-// ErrorWithIcon logs error message with emoji for user-friendly output
-func (l *Logger) ErrorWithIcon(icon string, msg string, args ...any) {
-	l.Error(icon+" "+msg, args...)
-}
-
-// DebugWithIcon logs debug message with emoji for development
-func (l *Logger) DebugWithIcon(icon string, msg string, args ...any) {
-	l.Debug(icon+" "+msg, args...)
-}
+func (l *Logger) InfoWithIcon(_ string, msg string, args ...any)  { l.Info(msg, args...) }
+func (l *Logger) WarnWithIcon(_ string, msg string, args ...any)  { l.Warn(msg, args...) }
+func (l *Logger) ErrorWithIcon(_ string, msg string, args ...any) { l.Error(msg, args...) }
+func (l *Logger) DebugWithIcon(_ string, msg string, args ...any) { l.Debug(msg, args...) }
 
 // Default logger instance - single instance for the entire application
 var Default = NewDefaultLogger()
@@ -114,4 +129,35 @@ func SetGlobalLogLevel(level LogLevel) {
 // NewComponentLogger creates a new logger for a specific component
 func NewComponentLogger(component string) *Logger {
 	return Default.WithComponent(component)
+}
+
+// SetGlobalLoggerWithConsoleWriter replaces the global Default logger using the provided console writer
+func SetGlobalLoggerWithConsoleWriter(level LogLevel, consoleWriter io.Writer) {
+	Default = NewLoggerWithConsoleWriter(level, consoleWriter)
+}
+
+// newFileTextHandler opens ~/.gennai/logs/gennai.log for append and returns a slog text handler
+func newFileTextHandler(level slog.Level) slog.Handler {
+	// Determine log file path
+	home, _ := os.UserHomeDir()
+	base := filepath.Join(home, ".gennai", "logs")
+	_ = os.MkdirAll(base, 0o755)
+	path := filepath.Join(base, "gennai.log")
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		// Fallback to stderr if file cannot be opened
+		return slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	}
+
+	opts := &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{Key: "time", Value: slog.StringValue(a.Value.Time().Format("15:04:05"))}
+			}
+			return a
+		},
+	}
+	return slog.NewTextHandler(f, opts)
 }

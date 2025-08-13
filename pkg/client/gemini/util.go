@@ -42,10 +42,13 @@ func isValidGeminiModel(model string) bool {
 
 // ModelCapabilities represents the capabilities of a Gemini model
 type ModelCapabilities struct {
-	SupportsVision       bool
-	SupportsToolCalling  bool
-	SupportsStructured   bool
-	MaxTokens            int
+	SupportsVision      bool
+	SupportsToolCalling bool
+	SupportsStructured  bool
+	MaxTokens           int
+	// MaxContextWindow is the approximate input context window size
+	// Gemini 2.5 models support ~1,048,576 token input contexts.
+	MaxContextWindow     int
 	SupportsSystemPrompt bool
 	SupportsMultimodal   bool
 	IsReasoningModel     bool
@@ -60,6 +63,7 @@ func getModelCapabilities(model string) ModelCapabilities {
 			SupportsToolCalling:  true,  // Function calling supported
 			SupportsStructured:   true,  // Structured output supported
 			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
+			MaxContextWindow:     1048576,
 			SupportsSystemPrompt: true,
 			SupportsMultimodal:   true, // Audio, images, video, text, PDF
 			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
@@ -70,6 +74,7 @@ func getModelCapabilities(model string) ModelCapabilities {
 			SupportsToolCalling:  true,  // Function calling supported
 			SupportsStructured:   true,  // Structured output supported
 			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
+			MaxContextWindow:     1048576,
 			SupportsSystemPrompt: true,
 			SupportsMultimodal:   true, // Text, images, video, audio (no PDF)
 			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
@@ -80,6 +85,7 @@ func getModelCapabilities(model string) ModelCapabilities {
 			SupportsToolCalling:  true,  // Function calling supported
 			SupportsStructured:   true,  // Structured output supported
 			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
+			MaxContextWindow:     1048576,
 			SupportsSystemPrompt: true,
 			SupportsMultimodal:   true, // Text, images, video, audio, PDF
 			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding, URL context
@@ -91,6 +97,7 @@ func getModelCapabilities(model string) ModelCapabilities {
 			SupportsToolCalling:  true,  // Function calling supported
 			SupportsStructured:   true,  // Structured output supported
 			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
+			MaxContextWindow:     1048576,
 			SupportsSystemPrompt: true,
 			SupportsMultimodal:   true, // Text, images, video, audio, PDF
 			IsReasoningModel:     true, // Thinking supported

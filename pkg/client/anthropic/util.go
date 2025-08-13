@@ -48,6 +48,23 @@ func supportsThinking(model string) bool {
 	return true
 }
 
+// getModelContextWindow returns a conservative approximation of the
+// model's context window (input token capacity). Anthropic models
+// generally provide large windows (~200k). This value is used for
+// utilization reporting only.
+func getModelContextWindow(model string) int {
+	switch model {
+	case "claude-opus-4-20250514",
+		"claude-sonnet-4-20250514",
+		"claude-3-7-sonnet-latest",
+		"claude-3-5-haiku-latest":
+		return 200000
+	default:
+		// Conservative default for unknown/alias names
+		return 200000
+	}
+}
+
 // convertToolChoiceToAnthropic converts domain ToolChoice to Anthropic format
 func convertToolChoiceToAnthropic(toolChoice domain.ToolChoice) anthropic.ToolChoiceUnionParam {
 	switch toolChoice.Type {
@@ -274,20 +291,67 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 				anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content())))
 			}
 		case message.MessageTypeAssistant:
-			// Assistants don't typically send images, but handle if needed
-			anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content())))
+			// Handle assistant messages with thinking content
+			var contentBlocks []anthropic.ContentBlockParamUnion
+
+			// Add thinking block first if present (required by Anthropic when thinking is enabled)
+			if thinking := msg.Thinking(); thinking != "" {
+				thinkingBlock := anthropic.ContentBlockParamUnion{
+					OfThinking: &anthropic.ThinkingBlockParam{
+						Thinking: thinking,
+					},
+				}
+				contentBlocks = append(contentBlocks, thinkingBlock)
+			}
+
+			// Add text content if present
+			if msg.Content() != "" {
+				textBlock := anthropic.NewTextBlock(msg.Content())
+				contentBlocks = append(contentBlocks, textBlock)
+			}
+
+			// If no content blocks, create a simple text block to avoid empty message
+			if len(contentBlocks) == 0 {
+				textBlock := anthropic.NewTextBlock(msg.Content())
+				contentBlocks = append(contentBlocks, textBlock)
+			}
+
+			anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(contentBlocks...))
 		case message.MessageTypeSystem:
 			// System messages in Anthropic are handled differently - convert to user message
 			anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(fmt.Sprintf("System: %s", msg.Content()))))
 		case message.MessageTypeToolCall:
 			if toolCallMsg, ok := msg.(*llmmsg.ToolCallMessage); ok {
-				// Anthropic tool call format
+				// When thinking is enabled globally and we have thinking content,
+				// ALL assistant messages must start with thinking blocks
+				var contentBlocks []anthropic.ContentBlockParamUnion
+
+				// Add thinking block only if we have actual thinking content
+				if thinkingContent := msg.Thinking(); thinkingContent != "" {
+					thinkingBlockParam := &anthropic.ThinkingBlockParam{
+						Thinking: thinkingContent,
+					}
+
+					// Check if we have a preserved signature from streaming
+					if signature, hasSignature := msg.Metadata()["anthropic_thinking_signature"].(string); hasSignature && signature != "" {
+						thinkingBlockParam.Signature = signature
+					}
+
+					thinkingBlock := anthropic.ContentBlockParamUnion{
+						OfThinking: thinkingBlockParam,
+					}
+					contentBlocks = append(contentBlocks, thinkingBlock)
+				}
+
+				// Add tool use block
 				toolUse := anthropic.NewToolUseBlock(
 					msg.ID(),
 					toolCallMsg.ToolArguments(),
 					string(toolCallMsg.ToolName()),
 				)
-				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(toolUse))
+				contentBlocks = append(contentBlocks, toolUse)
+
+				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(contentBlocks...))
 			}
 		case message.MessageTypeToolResult:
 			if toolResultMsg, ok := msg.(*llmmsg.ToolResultMessage); ok {

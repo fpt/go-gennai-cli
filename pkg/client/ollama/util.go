@@ -14,54 +14,41 @@ var logger = pkgLogger.NewComponentLogger("ollama-util")
 
 const roleSystem = "system"
 
-// fromOllamaMessage converts a single Ollama message to domain format
-func fromOllamaMessage(msg api.Message) message.Message {
-
-	// Handle tool calls from the model
-	if len(msg.ToolCalls) > 0 {
-		// For now, return the first tool call
-		// TODO: Handle multiple tool calls
+// toDomainMessageFromOllama converts a final Ollama API message to our domain message.
+// When includeThinking is true and thinking text is present, it attaches thinking.
+// Tool calls are converted to ToolCall or ToolCallBatch messages regardless of includeThinking.
+func toDomainMessageFromOllama(msg api.Message, includeThinking bool) message.Message {
+	// Handle tool calls from the model first
+	if len(msg.ToolCalls) == 1 {
 		toolCall := msg.ToolCalls[0]
-
 		return message.NewToolCallMessage(
 			message.ToolName(toolCall.Function.Name),
 			message.ToolArgumentValues(toolCall.Function.Arguments),
 		)
-	}
-
-	// Handle regular messages
-	var msgType message.MessageType
-	switch msg.Role {
-	case "user":
-		msgType = message.MessageTypeUser
-	case "assistant":
-		msgType = message.MessageTypeAssistant
-	case roleSystem:
-		msgType = message.MessageTypeSystem
-	default:
-		msgType = message.MessageTypeUser
-	}
-
-	// Check if message has images
-	if len(msg.Images) > 0 {
-		// Convert images to Base64 strings
-		images := make([]string, len(msg.Images))
-		for i, imgData := range msg.Images {
-			images[i] = string(imgData)
+	} else if len(msg.ToolCalls) > 1 {
+		var calls []*message.ToolCallMessage
+		for _, tc := range msg.ToolCalls {
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Function.Name),
+				message.ToolArgumentValues(tc.Function.Arguments),
+			))
 		}
-		return message.NewChatMessageWithImages(msgType, msg.Content, images)
+		return message.NewToolCallBatch(calls)
 	}
 
-	// Check if message has thinking content
-	if msg.Thinking != "" {
-		return message.NewChatMessageWithThinking(msgType, msg.Content, msg.Thinking)
+	// Assistant text response (thinking optional)
+	if includeThinking && len(msg.Thinking) > 0 {
+		return message.NewChatMessageWithThinking(
+			message.MessageTypeAssistant,
+			msg.Content,
+			msg.Thinking,
+		)
 	}
-
-	return message.NewChatMessage(msgType, msg.Content)
+	return message.NewChatMessage(message.MessageTypeAssistant, msg.Content)
 }
 
-// ToOllamaMessages converts neutral messages to Ollama format
-func ToOllamaMessages(messages []message.Message) []api.Message {
+// toOllamaMessages converts neutral messages to Ollama format
+func toOllamaMessages(messages []message.Message) []api.Message {
 	var ollamaMessages []api.Message
 
 	for _, msg := range messages {
@@ -79,9 +66,9 @@ func ToOllamaMessages(messages []message.Message) []api.Message {
 					// Always assume Base64 data and decode to raw binary
 					if decodedData, err := base64.StdEncoding.DecodeString(imageData); err == nil {
 						ollamaMsg.Images[i] = api.ImageData(decodedData) // Use raw binary data
-						logger.DebugWithIcon("🖼️", "Using Base64 image data", "decoded_bytes", len(decodedData))
+						logger.DebugWithIntention(pkgLogger.IntentionDebug, "Using Base64 image data", "decoded_bytes", len(decodedData))
 					} else {
-						logger.WarnWithIcon("⚠️", "Failed to decode Base64 image data", "error", err)
+						logger.Warn("Failed to decode Base64 image data", "error", err)
 						// Fallback to treating as raw data (though this probably won't work)
 						ollamaMsg.Images[i] = api.ImageData(imageData)
 					}
@@ -121,7 +108,6 @@ func ToOllamaMessages(messages []message.Message) []api.Message {
 				if toolResultMsg.Error != "" {
 					content = fmt.Sprintf("Error: %s", toolResultMsg.Error)
 				}
-
 				// For now, just send as a regular user message
 				// TODO: Implement proper tool result handling when API supports it
 				ollamaMessages = append(ollamaMessages, api.Message{
@@ -129,6 +115,9 @@ func ToOllamaMessages(messages []message.Message) []api.Message {
 					Content: content,
 				})
 			}
+		case message.MessageTypeToolCallBatch:
+			// Skip batch container in request reconstruction; individual calls/results are present
+			continue
 		}
 	}
 
@@ -205,16 +194,4 @@ func addToolUsageSystemMessage(messages *[]api.Message, systemContent string) {
 		}
 		*messages = append([]api.Message{systemMessage}, *messages...)
 	}
-}
-
-// filterToolsByName filters Ollama tools to only include the specified tool
-func filterToolsByName(tools []api.Tool, toolName message.ToolName) []api.Tool {
-	var filteredTools []api.Tool
-	for _, tool := range tools {
-		if tool.Function.Name == string(toolName) {
-			filteredTools = append(filteredTools, tool)
-			break
-		}
-	}
-	return filteredTools
 }

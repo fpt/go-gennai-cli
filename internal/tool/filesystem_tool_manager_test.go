@@ -248,13 +248,13 @@ func TestFileSystemToolManager_ToolRegistration(t *testing.T) {
 
 	manager := NewFileSystemToolManager(config, tempDir)
 
-	// Verify all expected tools are registered
+	// Verify expected tools
 	expectedTools := []string{
-		"read_file",
-		"write_file",
-		"edit_file",
-		"list_directory",
-		"find_file",
+		"Read",
+		"Write",
+		"Edit",
+		"LS",
+		"MultiEdit",
 	}
 
 	toolsMap := manager.GetTools()

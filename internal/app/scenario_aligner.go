@@ -1,4 +1,4 @@
-package agent
+package app
 
 import (
 	"fmt"
@@ -36,7 +36,7 @@ func (s *ScenarioAligner) InjectMessage(state domain.State, curIter, iterLimit i
 
 	// if the last message is a tool response, we prepend a special system message
 	if lastMsg := state.GetLastMessage(); lastMsg != nil && lastMsg.Type() == message.MessageTypeToolResult {
-		logger.DebugWithIcon("🔧", "Found tool result, prepending system message")
+		logger.DebugWithIntention(pkgLogger.IntentionTool, "Found tool result, prepending system message")
 
 		// Create more specific system message based on tool result content
 		if len(lastMsg.Images()) > 0 {
@@ -45,6 +45,12 @@ func (s *ScenarioAligner) InjectMessage(state domain.State, curIter, iterLimit i
 		} else {
 			// Regular tool result
 			messages = append(messages, "You received a tool result. Analyze it and decide next steps to respond to original user request.")
+
+			// Early-conclude heuristic: if validations succeeded, or all todos done, prompt to finalize now
+			content := lastMsg.Content()
+			if strings.Contains(content, "All validation checks passed") || strings.Contains(content, "Code compiles successfully") {
+				messages = append(messages, "Validation indicates success. If the user's request appears fully satisfied, provide a final concise response now and avoid further tool calls.")
+			}
 		}
 	}
 
@@ -53,7 +59,12 @@ func (s *ScenarioAligner) InjectMessage(state domain.State, curIter, iterLimit i
 		messages = append(messages, fmt.Sprintf("## Current Todos:\n%s\n\nConsider these todos when responding and use TodoWrite tool to update progress.",
 			todosContext))
 
-		logger.DebugWithIcon("📋", "Enriched user message with todo context", "context_length", len(todosContext))
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Enriched user message with todo context", "context_length", len(todosContext))
+	}
+
+	// If all todos are completed, nudge to conclude early
+	if s.todoToolManager != nil && s.todoToolManager.IsAllCompleted() {
+		messages = append(messages, "All todos are completed. Conclude with a final response and do not call more tools.")
 	}
 
 	if len(messages) > 0 {

@@ -68,6 +68,11 @@ The system uses a **capability-based architecture** with type assertion for clea
 - `domain.LLM` - Base interface for basic chat functionality
 - `domain.ToolCallingLLM` - Extends LLM with tool calling capabilities  
 - `domain.StructuredLLM[T any]` - Extends LLM with type-safe structured output
+ - Optional telemetry & caching interfaces:
+   - `domain.TokenUsageProvider` — exposes last call token usage (if available)
+   - `domain.ModelIdentifier` — exposes stable model ID for telemetry/grouping
+   - `domain.SessionAware` — set/get provider-visible session ID (for provider caches)
+   - `domain.ModelSideCacheConfigurator` — pass provider-native caching hints (no local cache)
 
 **Type Assertion Pattern:**
 ```go
@@ -83,6 +88,21 @@ if toolClient, ok := client.(domain.ToolCallingLLM); ok {
 - **Go Idioms**: Follows standard Go patterns for capability detection
 - **Self-Documenting**: Capabilities are clear through interface compliance
 
+### Token Usage & Provider-Native Caching
+
+GENNAI does not implement a local response cache. Instead, it provides hooks and optional interfaces so clients can:
+
+- Report token usage (for logs/telemetry) via `TokenUsageProvider`.
+- Identify the model via `ModelIdentifier` (useful for grouping/metrics).
+- Accept provider-native caching hints via `ModelSideCacheConfigurator` and `SessionAware`.
+
+Current status:
+- OpenAI (Responses API): token usage wired (input/output/total tokens) where the SDK exposes `responses.ResponseUsage`. Session/caching hints are stored for later use when the SDK surfaces prompt caching controls.
+- Anthropic/Gemini/Ollama: token usage and session/caching support will be added when their SDKs provide the required fields and toggles.
+
+Reference for provider-side caching:
+- OpenAI Prompt Caching: https://platform.openai.com/docs/guides/prompt-caching
+
 ## Tool Calling Support
 
 GENNAI CLI uses native tool calling for all supported models:
@@ -95,6 +115,20 @@ GENNAI CLI uses native tool calling for all supported models:
 The system automatically tests unknown Ollama models for tool calling capability and warns users if a model lacks this support, ensuring you always know what functionality is available.
 
 ## Development
+
+### Output and Logging (Writer + Intentions)
+
+- ScenarioRunner Writer: The application layer accepts an `io.Writer` and streams thinking output to it. This allows redirecting output to REPL, tests, or a future gRPC stream.
+- Unified Console Writer: Configure the logger with `SetGlobalLoggerWithConsoleWriter` to write console logs to the same `io.Writer` used by ScenarioRunner.
+- Intentions: Only Info/Debug logs attach an `Intention` (e.g., `tool`, `thinking`, `status`, `statistics`, `success`, `debug`). Console icons are derived from intention; file logs store `intention=...` as plain structured metadata (no icons).
+- Warn/Error: Do not use intention; rely on level only. No icon mapping.
+- Model-Facing Output: Tool result text sent back to LLMs avoids emojis and uses PASS/FAIL/ERROR phrasing for clarity.
+
+Relevant code:
+- `internal/app/scenario.go`: `ScenarioRunner` accepts an `io.Writer`; thinking channels created against that writer.
+- `pkg/message/thinking.go`: `CreateThinkingChannel(w io.Writer)` streams thinking to the provided writer.
+- `pkg/logger/logger.go`: `NewLoggerWithConsoleWriter`, `SetGlobalLoggerWithConsoleWriter`, and `Info/DebugWithIntention` APIs.
+- `pkg/logger/plain_handler.go`: Injects console icon from intention; filters it out for file logs.
 
 ### Running Tests
 

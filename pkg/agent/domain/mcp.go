@@ -215,7 +215,7 @@ func extractTextFromMCPResult(result *mcpapi.CallToolResult) string {
 			}
 
 			// For other content types, log and return formatted string
-			logger.WarnWithIcon("⚠️", "Unhandled MCP content type, attempting string conversion", "type", fmt.Sprintf("%T", firstContent))
+			logger.Warn("Unhandled MCP content type, attempting string conversion", "type", fmt.Sprintf("%T", firstContent))
 			return fmt.Sprintf("%v", firstContent)
 		}
 	}

@@ -37,6 +37,11 @@ type SerializableState struct {
 type MessageState struct {
 	Messages []message.Message `json:"-"` // Don't serialize directly
 	Metadata map[string]any    `json:"-"` // Don't serialize directly
+
+	// Token counters snapshot for telemetry (not serialized)
+	tokenInput  int
+	tokenOutput int
+	tokenTotal  int
 }
 
 // NewMessageState creates a new message state
@@ -67,6 +72,24 @@ func (c *MessageState) GetLastMessage() message.Message {
 // Clear clears all messages from the context
 func (c *MessageState) Clear() {
 	c.Messages = make([]message.Message, 0)
+}
+
+// ResetTokenCounters clears the internal token counters snapshot
+func (c *MessageState) ResetTokenCounters() {
+	c.tokenInput, c.tokenOutput, c.tokenTotal = 0, 0, 0
+}
+
+// RecalculateTokenCountersFromMessages recomputes counters by summing input+output across messages
+func (c *MessageState) RecalculateTokenCountersFromMessages() {
+	in, out, _ := c.GetTotalTokenUsage()
+	c.tokenInput = in
+	c.tokenOutput = out
+	c.tokenTotal = in + out
+}
+
+// TokenCountersSnapshot returns the last computed counters (input, output, total)
+func (c *MessageState) TokenCountersSnapshot() (int, int, int) {
+	return c.tokenInput, c.tokenOutput, c.tokenTotal
 }
 
 // RemoveMessagesBySource removes all messages with the specified source

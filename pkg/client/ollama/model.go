@@ -35,6 +35,13 @@ var ollamaModels = []OllamaModel{
 		Vision:  false,
 		Context: 128000,
 	},
+	{
+		Name:    "gemma3:latest",
+		Tool:    false, // No native tool calling
+		Think:   false, // No thinking capability
+		Vision:  true,  // Has vision capability
+		Context: 8192,  // Standard context for Gemma models
+	},
 }
 
 // IsToolCapableModel checks if a model supports native tool calling
@@ -91,4 +98,40 @@ func IsModelInKnownList(model string) bool {
 	}
 
 	return false
+}
+
+// GetModelContextWindow returns the known context window for a model.
+// If the model isn't in the known list, returns 0 to indicate unknown.
+func GetModelContextWindow(model string) int {
+	modelLower := strings.ToLower(model)
+	for _, ollamaModel := range ollamaModels {
+		if strings.Contains(modelLower, strings.ToLower(ollamaModel.Name)) {
+			return ollamaModel.Context
+		}
+	}
+	return 0
+}
+
+// IsJSONSchemaCapableModel checks if a model supports JSON Schema format for structured output
+// JSON Schema is supported by most Ollama models that don't have native tool calling
+func IsJSONSchemaCapableModel(model string) bool {
+	modelLower := strings.ToLower(model)
+
+	// Check against the structured model list first
+	for _, ollamaModel := range ollamaModels {
+		if strings.Contains(modelLower, strings.ToLower(ollamaModel.Name)) {
+			// Models with native tool calling don't need JSON Schema format for structured output
+			return !ollamaModel.Tool
+		}
+	}
+
+	// For unknown models, assume JSON Schema support (most Ollama models support it)
+	// This provides better user experience for new/unlisted models
+	return true
+}
+
+// IsGBNFCapableModel is deprecated, use IsJSONSchemaCapableModel instead
+// Kept for backward compatibility
+func IsGBNFCapableModel(model string) bool {
+	return IsJSONSchemaCapableModel(model)
 }

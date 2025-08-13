@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
+	"github.com/fpt/go-gennai-cli/pkg/agent/events"
+	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 )
 
@@ -20,20 +23,27 @@ type ReAct struct {
 	state         domain.State
 	toolManager   domain.ToolManager
 	aligner       domain.Aligner
-	maxIterations int // configurable loop limit
+	maxIterations int                  // configurable loop limit
+	eventEmitter  events.EventEmitter  // emitter for agent events
 }
 
 // Ensure ReAct implements domain.ReAct interface
 var _ domain.ReAct = (*ReAct)(nil)
 
-func NewReAct(llmClient domain.LLM, toolManager domain.ToolManager, sharedState domain.State, aligner domain.Aligner, maxIterations int) *ReAct {
-	return &ReAct{
+// component logger for agent messages in ReAct
+var reactLogger = pkgLogger.NewComponentLogger("react")
+
+func NewReAct(llmClient domain.LLM, toolManager domain.ToolManager, sharedState domain.State, aligner domain.Aligner, maxIterations int) (*ReAct, events.EventEmitter) {
+	eventEmitter := events.NewSimpleEventEmitter()
+	reactClient := &ReAct{
 		llmClient:     llmClient,
 		toolManager:   toolManager,
 		state:         sharedState,
 		aligner:       aligner,
 		maxIterations: maxIterations,
+		eventEmitter:  eventEmitter,
 	}
+	return reactClient, eventEmitter
 }
 
 // GetLastMessage returns the last message in the conversation without exposing state
@@ -85,38 +95,81 @@ func (r *ReAct) GetConversationSummary() string {
 }
 
 // chatWithThinkingIfSupported uses thinking if the LLM client supports it
-func (r *ReAct) chatWithThinkingIfSupported(ctx context.Context, messages []message.Message) (message.Message, error) {
-	return r.llmClient.Chat(ctx, messages, true)
+func (r *ReAct) chatWithThinkingIfSupported(ctx context.Context, messages []message.Message, thinkingChan chan<- string) (message.Message, error) {
+	return r.llmClient.Chat(ctx, messages, true, thinkingChan)
 }
 
 // chatWithToolChoice uses tool choice control if the LLM client supports it
-func (r *ReAct) chatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (r *ReAct) chatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, thinkingChan chan<- string) (message.Message, error) {
 	// Check if the client supports tool calling with tool choice
 	if toolClient, ok := r.llmClient.(domain.ToolCallingLLM); ok {
-		return toolClient.ChatWithToolChoice(ctx, messages, toolChoice)
+		return toolClient.ChatWithToolChoice(ctx, messages, toolChoice, true, thinkingChan)
 	}
 
 	// If the client doesn't support tool choice, fall back to regular chat
 	// This ensures compatibility with non-tool-calling clients
-	return r.chatWithThinkingIfSupported(ctx, messages)
+	return r.llmClient.Chat(ctx, messages, true, thinkingChan)
 }
 
-// InvokeWithOptions processes input using the configured maxIterations (options.LoopLimit is ignored)
+// annotateAndLogUsage attaches token usage (when available) to the response message
+// and prints a concise usage line for quick visibility.
+func (r *ReAct) annotateAndLogUsage(resp message.Message) {
+	// Only log usage for assistant/reasoning messages to avoid repeating the
+	// same usage for tool call placeholders (no new model tokens consumed yet).
+	switch resp.Type() {
+	case message.MessageTypeToolCall, message.MessageTypeToolCallBatch:
+		return
+	}
+
+	// Get token usage if available
+	if usageProvider, ok := r.llmClient.(domain.TokenUsageProvider); ok {
+		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+			// Attach to message for persistence in state
+			resp.SetTokenUsage(usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+			// Note: Token and context display moved to context display below input prompt
+		}
+	}
+}
+
+// Invoke processes input using the configured maxIterations
 func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, error) {
 	// Use the configured maxIterations instead of options.LoopLimit
 	loopLimit := r.maxIterations
+
+	// Create internal thinking channel to convert string chunks to ThinkingChunk events
+	thinkingChan := make(chan string, 10)
+	go func() {
+		for chunk := range thinkingChan {
+			// Only emit non-empty chunks - empty strings were used for end signaling
+			if chunk != "" {
+				r.eventEmitter.EmitEvent(events.EventTypeThinkingChunk, events.ThinkingChunkData{
+					Content: chunk,
+				})
+			}
+		}
+	}()
+	defer close(thinkingChan)
 
 	// Add user message to state (enriched with todos if available)
 	userMessage := message.NewChatMessage(message.MessageTypeUser, input)
 	r.state.AddMessage(userMessage)
 
 	for i := range loopLimit {
+		// Check for context cancellation (e.g., Ctrl+C)
+		select {
+		case <-ctx.Done():
+			// Context was cancelled; log and bubble up cancellation without adding messages
+			reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user. History preserved.")
+			return nil, ctx.Err()
+		default:
+			// Continue with normal execution
+		}
+
 		// Remove any previous aligner messages to avoid context contamination
 		// We only want the most current alignment guidance
 		if removedCount := r.state.RemoveMessagesBySource(message.MessageSourceAligner); removedCount > 0 {
 			// Debug: Removed previous aligner messages to prevent context contamination
-			// (using fmt.Printf since ReAct is lower level and doesn't have logger context)
-			fmt.Printf("🧠 Debug: Removed %d previous aligner messages\n", removedCount)
+			reactLogger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed previous aligner messages", "count", removedCount)
 		}
 
 		r.aligner.InjectMessage(r.state, i, loopLimit)
@@ -142,23 +195,31 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 		// Check if we have tools available and should use tool calling
 		if r.toolManager != nil && len(r.toolManager.GetTools()) > 0 {
 			// Use tool choice auto to let the LLM decide when to use tools
-			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto})
+			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto}, thinkingChan)
 		} else {
 			// Fall back to thinking if supported, otherwise regular chat
-			resp, err = r.chatWithThinkingIfSupported(ctx, messages)
+			resp, err = r.chatWithThinkingIfSupported(ctx, messages, thinkingChan)
 		}
 
 		if err != nil {
+			// Check if the error is due to context cancellation
+			if ctx.Err() == context.Canceled {
+				reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during LLM call. History preserved.")
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("failed to get response from LLM client: %w", err)
 		}
 
 		// Clear waiting indicator and show minified response
 		fmt.Print("\r                    \r") // Clear the "Thinking..." line
+		// Annotate and log token usage when available
+		r.annotateAndLogUsage(resp)
 		r.printMinifiedResponse(resp, i)
-		r.state.AddMessage(resp)
 
 		switch resp := resp.(type) {
 		case *message.ChatMessage:
+			// Add assistant response to state
+			r.state.AddMessage(resp)
 			// Check if this is reasoning (intermediate thinking) vs final answer
 			if resp.Type() == message.MessageTypeReasoning {
 				// Continue the ReAct loop for reasoning messages
@@ -167,15 +228,31 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 			} else {
 				// Return for final answers (MessageTypeAssistant)
 				// (Debug logging removed for cleaner output - final answer reached)
+				r.emitEventWithIteration(events.EventTypeResponse, events.ResponseData{
+					Message: resp,
+				}, i, loopLimit)
 				return resp, nil
 			}
 
 		case *message.ToolCallMessage:
+			// Record the tool call message in state
+			r.state.AddMessage(resp)
 			toolCall := resp
 
-			// Show tool execution indicator
-			fmt.Printf("🔧 Running tool: %s\n", toolCall.ToolName())
+			// Check for cancellation before tool execution
+			select {
+			case <-ctx.Done():
+				reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during tool execution. History preserved.")
+				return nil, ctx.Err()
+			default:
+			}
 
+			// Emit tool call start event
+			r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+				ToolName:  string(toolCall.ToolName()),
+				Arguments: toolCall.ToolArguments(),
+				CallID:    "", // Could add call ID if needed
+			})
 			msg, err := r.handleToolCall(ctx, toolCall)
 			if err != nil {
 				return nil, fmt.Errorf("failed to handle tool call: %w", err)
@@ -188,6 +265,37 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 			r.state.AddMessage(msg)
 
 			// Continue to next iteration to process the tool result
+
+		case *message.ToolCallBatchMessage:
+			// Execute multiple tools within a single model turn to reduce loops
+			batch := resp
+			calls := batch.Calls()
+			for _, call := range calls {
+				// Check for cancellation before each tool in the batch
+				select {
+				case <-ctx.Done():
+					reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
+					return nil, ctx.Err()
+				default:
+				}
+
+				// Add each tool call message to state for transcript consistency
+				r.state.AddMessage(call)
+				// Emit tool call start event for batch call
+				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+					ToolName:  string(call.ToolName()),
+					Arguments: call.ToolArguments(),
+					CallID:    "", // Could add call ID if needed
+				})
+				msg, err := r.handleToolCall(ctx, call)
+				if err != nil {
+					return nil, fmt.Errorf("failed to handle tool call (batch): %w", err)
+				}
+				r.printTruncatedToolResult(msg)
+				r.state.AddMessage(msg)
+			}
+			// After executing the batch, continue the loop to let the model consume results
+			continue
 
 		default:
 			return nil, fmt.Errorf("unexpected response type: %T", resp)
@@ -227,67 +335,123 @@ func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMe
 func (r *ReAct) printMinifiedResponse(resp message.Message, iteration int) {
 	switch msg := resp.(type) {
 	case *message.ChatMessage:
-		if msg.Type() == message.MessageTypeAssistant {
-			// Show thinking content if available
-			if thinking := msg.Thinking(); thinking != "" {
-				fmt.Printf("🧠 Thinking:\n%s\n\n", thinking)
-			}
-
-			// Show first 100 characters of assistant response
-			content := msg.Content()
-			if len(content) > 100 {
-				content = content[:100] + "..."
-			}
-			fmt.Printf("💭 %s\n", content)
-		} else if msg.Type() == message.MessageTypeReasoning {
-			fmt.Printf("🧠 [Reasoning step %d]\n", iteration+1)
-
-			// Show thinking content for reasoning messages too
-			if thinking := msg.Thinking(); thinking != "" {
-				fmt.Printf("🧠 Thinking:\n%s\n\n", thinking)
-			}
-		}
+		// Suppress assistant content/reasoning logs here to avoid duplicate
+		// console output; thinking is streamed via the thinking channel.
+		_ = iteration
 	case *message.ToolCallMessage:
-		fmt.Printf("🔧 Calling: %s\n", msg.ToolName())
+		// Emit tool call start event (for logging the call)
+		r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+			ToolName:  string(msg.ToolName()),
+			Arguments: msg.ToolArguments(),
+			CallID:    "", // Could add call ID if needed
+		})
 	}
 }
 
-// printTruncatedToolResult shows tool output with truncation for success, full output for errors
+// printTruncatedToolResult emits tool result events
 func (r *ReAct) printTruncatedToolResult(msg message.Message) {
-	content := msg.Content()
-	if content == "" {
-		fmt.Println("   ↳ (no output)")
-		return
+	content := strings.TrimRight(msg.Content(), "\n")
+	isError := strings.HasPrefix(content, "Error:")
+	
+	// Emit tool result event
+	r.eventEmitter.EmitEvent(events.EventTypeToolResult, events.ToolResultData{
+		ToolName: "", // Tool name would need to be tracked separately
+		CallID:   "", // Call ID would need to be tracked separately  
+		Content:  content,
+		IsError:  isError,
+	})
+}
+
+// summarizeToolArgs produces a log-friendly version of tool arguments by truncating
+// large strings and collapsing deeply nested or large collections.
+func (r *ReAct) summarizeToolArgs(args message.ToolArgumentValues) any {
+	const (
+		maxStringLen  = 120 // max characters for string values
+		maxArrayItems = 8   // max items to display from arrays/slices
+		maxMapEntries = 12  // max entries to display from maps
+		maxDepth      = 2   // max recursion depth
+	)
+
+	var summarize func(v any, depth int) any
+	summarize = func(v any, depth int) any {
+		if depth > maxDepth {
+			return "…"
+		}
+		switch t := v.(type) {
+		case string:
+			if len(t) <= maxStringLen {
+				return t
+			}
+			return t[:maxStringLen-3] + "..."
+		case []byte:
+			s := string(t)
+			if len(s) <= maxStringLen {
+				return s
+			}
+			return s[:maxStringLen-3] + "..."
+		case []string:
+			n := len(t)
+			limit := n
+			if limit > maxArrayItems {
+				limit = maxArrayItems
+			}
+			out := make([]any, 0, limit)
+			for i := 0; i < limit; i++ {
+				out = append(out, summarize(t[i], depth+1))
+			}
+			if n > limit {
+				out = append(out, fmt.Sprintf("…+%d more", n-limit))
+			}
+			return out
+		case []any:
+			n := len(t)
+			limit := n
+			if limit > maxArrayItems {
+				limit = maxArrayItems
+			}
+			out := make([]any, 0, limit)
+			for i := 0; i < limit; i++ {
+				out = append(out, summarize(t[i], depth+1))
+			}
+			if n > limit {
+				out = append(out, fmt.Sprintf("…+%d more", n-limit))
+			}
+			return out
+		case map[string]any:
+			out := make(map[string]any)
+			count := 0
+			for k, val := range t {
+				if count >= maxMapEntries {
+					out["…"] = fmt.Sprintf("+%d more", len(t)-count)
+					break
+				}
+				out[k] = summarize(val, depth+1)
+				count++
+			}
+			return out
+		default:
+			// Numbers, bools, and other simple types
+			return t
+		}
 	}
 
-	// Check if this is an error message - show full error messages
-	isError := strings.HasPrefix(content, "Error:")
+	return summarize(map[string]any(args), 0)
+}
 
-	if isError {
-		// Show full error messages without truncation
-		lines := strings.Split(content, "\n")
-		for _, line := range lines {
-			fmt.Printf("   ↳ %s\n", line)
-		}
-	} else {
-		// Apply truncation for successful results (original behavior)
-		lines := strings.Split(content, "\n")
-
-		// Show last 5 lines maximum
-		maxLines := 5
-		startLine := 0
-		if len(lines) > maxLines {
-			startLine = len(lines) - maxLines
-			fmt.Printf("   ↳ ...(%d more lines)\n", startLine)
-		}
-
-		for i := startLine; i < len(lines); i++ {
-			line := lines[i]
-			if len(line) > 80 {
-				line = line[:77] + "..."
-			}
-			fmt.Printf("   ↳ %s\n", line)
-		}
+// emitEventWithIteration emits an event with iteration context
+func (r *ReAct) emitEventWithIteration(eventType events.EventType, data interface{}, currentIteration, maxIterations int) {
+	event := events.AgentEvent{
+		Type:      eventType,
+		Timestamp: time.Now(),
+		Data:      data,
+		Iteration: &events.IterationInfo{
+			Current: currentIteration,
+			Maximum: maxIterations,
+		},
+	}
+	
+	for _, handler := range r.eventEmitter.(*events.SimpleEventEmitter).GetHandlers() {
+		handler(event)
 	}
 }
 

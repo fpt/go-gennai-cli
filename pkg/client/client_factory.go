@@ -49,3 +49,40 @@ func NewClientWithToolManager(client domain.LLM, toolManager domain.ToolManager)
 		return nil, fmt.Errorf("unsupported client type for tool calling: %T", client)
 	}
 }
+
+// NewStructuredClient creates a structured client for the given type T and base LLM client
+// Uses the most appropriate structured output method for each provider
+func NewStructuredClient[T any](client domain.LLM) (domain.StructuredLLM[T], error) {
+	// Check if the client already supports structured output
+	if structuredClient, ok := client.(domain.StructuredLLM[T]); ok {
+		return structuredClient, nil
+	}
+
+	// Determine the appropriate structured client based on the client type
+	switch c := client.(type) {
+	case *ollama.OllamaClient:
+		// For Ollama clients, check if the model supports JSON Schema or native tool calling
+		if ollama.IsJSONSchemaCapableModel(c.OllamaCore.Model()) {
+			// Use JSON Schema-based structured client
+			return ollama.NewOllamaStructuredClient[T](c.OllamaCore), nil
+		} else if ollama.IsToolCapableModel(c.OllamaCore.Model()) {
+			// Use generic tool calling-based structured client
+			return NewToolCallingStructuredClient[T](c), nil
+		} else {
+			// Model doesn't support either JSON Schema or tool calling
+			return nil, fmt.Errorf("model %s does not support structured output", c.OllamaCore.Model())
+		}
+	case *anthropic.AnthropicClient:
+		// For Anthropic, use the generic tool calling-based structured client
+		return NewToolCallingStructuredClient[T](c), nil
+	case *openai.OpenAIClient:
+		// For OpenAI, use the generic tool calling-based structured client
+		return NewToolCallingStructuredClient[T](c), nil
+	case *gemini.GeminiClient:
+		// For Gemini, use native structured output with ResponseMIMEType and ResponseSchema
+		return gemini.NewGeminiStructuredClient[T](c.GeminiCore), nil
+	default:
+		// For unknown clients, we cannot create a structured client
+		return nil, fmt.Errorf("unsupported client type for structured output: %T", client)
+	}
+}

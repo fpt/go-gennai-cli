@@ -22,12 +22,14 @@ type mockLLM struct {
 	toolManager            domain.ToolManager // Store the tool manager
 }
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, messages)
 	}
 	return nil, errors.New("mock not configured")
 }
+
+func (m *mockLLM) ModelID() string { return "mock-llm" }
 
 // SetToolManager sets the tool manager (mock implementation)
 func (m *mockLLM) SetToolManager(toolManager domain.ToolManager) {
@@ -46,12 +48,12 @@ func (m *mockLLM) GetToolManager() domain.ToolManager {
 }
 
 // ChatWithToolChoice sends a message with tool choice control (mock implementation)
-func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatWithToolChoiceFunc != nil {
 		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
 	}
 	// Fall back to regular chat for mock
-	return m.Chat(ctx, messages, false)
+	return m.Chat(ctx, messages, false, thinkingChan)
 }
 
 // Mock ToolManager
@@ -113,7 +115,7 @@ func TestNewReAct(t *testing.T) {
 	mockLLM := &mockLLM{}
 	mockToolManager := &mockToolManager{}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	if react == nil {
 		t.Fatal("NewReAct returned nil")
@@ -134,7 +136,7 @@ func TestReAct_MessageStateEncapsulation(t *testing.T) {
 	mockLLM := &mockLLM{}
 	mockToolManager := &mockToolManager{}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	// Test that ReAct properly encapsulates state - we can only test through public methods
 	// Add a message and verify we can get it back through GetLastMessage
@@ -180,7 +182,7 @@ func TestReAct_Invoke_ChatMessage(t *testing.T) {
 		return expectedResponse, nil
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.Invoke(ctx, "Hello")
@@ -245,7 +247,7 @@ func TestReAct_Invoke_ToolCall(t *testing.T) {
 			}
 		},
 	}
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), mockAlign, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), mockAlign, 10)
 
 	ctx := context.Background()
 	result, err := react.Invoke(ctx, "Use test tool")
@@ -299,7 +301,7 @@ func TestReAct_Invoke_LLMError(t *testing.T) {
 		return nil, expectedError
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.Invoke(ctx, "Hello")
@@ -336,7 +338,7 @@ func TestReAct_Invoke_ToolError(t *testing.T) {
 		return message.ToolResult{}, expectedError
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.Invoke(ctx, "Use test tool")
@@ -372,6 +374,9 @@ func (u *unexpectedMessage) String() string                { return fmt.Sprintf(
 func (u *unexpectedMessage) TruncatedString() string {
 	return fmt.Sprintf("[unexpected] %s", u.content)
 }
+func (u *unexpectedMessage) Metadata() map[string]any {
+	return nil
+}
 
 // Token usage methods (required by Message interface)
 func (u *unexpectedMessage) InputTokens() int                                         { return 0 }
@@ -393,7 +398,7 @@ func TestReAct_Invoke_UnexpectedResponseType(t *testing.T) {
 		return unexpectedMsg, nil
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.Invoke(ctx, "Hello")
@@ -433,7 +438,7 @@ func TestReAct_handleToolCall(t *testing.T) {
 		return message.NewToolResultText("tool result"), nil
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.handleToolCall(ctx, toolCallMessage)
@@ -479,7 +484,7 @@ func TestReAct_handleToolCall_Error(t *testing.T) {
 		return message.ToolResult{}, expectedError
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 	result, err := react.handleToolCall(ctx, toolCallMessage)
@@ -518,7 +523,7 @@ func TestReAct_StateManagement(t *testing.T) {
 		return message.NewChatMessage(message.MessageTypeAssistant, "response "+string(rune(callCount+'0'))), nil
 	}
 
-	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
+	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
 
@@ -601,7 +606,7 @@ func TestReAct_compaction(t *testing.T) {
 			}
 
 			// Create ReAct instance
-			react := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
+			react, _ := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
 
 			// Populate with test messages
 			for i := 0; i < tt.initialMessages; i++ {
@@ -698,7 +703,7 @@ func TestReAct_compactionEdgeCases(t *testing.T) {
 			},
 		}
 		mockTM := &mockToolManager{}
-		react := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
+		react, _ := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
 
 		// Test compaction with empty state (should not do anything)
 		ctx := context.Background()
@@ -724,7 +729,7 @@ func TestReAct_compactionEdgeCases(t *testing.T) {
 			},
 		}
 		mockTM := &mockToolManager{}
-		react := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
+		react, _ := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
 
 		// Add exactly 60 messages (> 50 to trigger compaction attempt)
 		for i := 0; i < 60; i++ {
@@ -769,7 +774,7 @@ func TestReAct_compactionWithToolCalls(t *testing.T) {
 				return message.ToolResult{Text: "mock result"}, nil
 			},
 		}
-		react := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
+		react, _ := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
 
 		// Create a scenario where tool calls ARE split across the compaction boundary
 		// Strategy: Put tool calls in positions 47-48 (which will be summarized)
@@ -885,7 +890,7 @@ func TestReAct_compactionWithToolCalls(t *testing.T) {
 			},
 		}
 		mockTM := &mockToolManager{}
-		react := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
+		react, _ := NewReAct(mockLLM, mockTM, state.NewMessageState(), &mockAligner{}, 10)
 
 		// Add 60 regular messages (no tool calls) - compaction should work normally
 		for i := 0; i < 60; i++ {

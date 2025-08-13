@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -21,14 +22,14 @@ func (c *MessageState) CleanupMandatory() error {
 	// Remove any previous summary messages first to get accurate count
 	previousSummariesRemoved := c.RemoveMessagesBySource(message.MessageSourceSummary)
 	if previousSummariesRemoved > 0 {
-		logger.DebugWithIcon("🧹", "Removed previous summary messages during cleanup",
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed previous summary messages during cleanup",
 			"removed_count", previousSummariesRemoved)
 	}
 
 	// Remove aligner messages (mandatory for context purity)
 	alignerRemoved := c.RemoveMessagesBySource(message.MessageSourceAligner)
 	if alignerRemoved > 0 {
-		logger.DebugWithIcon("🧹", "Removed aligner messages during mandatory cleanup",
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed aligner messages during mandatory cleanup",
 			"removed_count", alignerRemoved)
 	}
 
@@ -50,7 +51,7 @@ func (c *MessageState) CleanupMandatory() error {
 					newMsg.SetTokenUsage(msg.InputTokens(), msg.OutputTokens(), msg.TotalTokens())
 					c.Messages[i] = newMsg
 				}
-				logger.DebugWithIcon("🖼️", "Truncated vision content for token efficiency",
+				logger.DebugWithIntention(pkgLogger.IntentionDebug, "Truncated vision content for token efficiency",
 					"message_id", msg.ID(), "position", "older_message")
 			}
 		}
@@ -65,29 +66,81 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 		return nil // No token limit specified
 	}
 
-	_, _, totalTokens := c.GetTotalTokenUsage()
-	threshold := float64(maxTokens) * (thresholdPercent / 100.0)
-	usagePercent := (float64(totalTokens) / float64(maxTokens)) * 100
+	// Prefer an estimate based on content length rather than cumulative historical usage,
+	// which double-counts across turns. If the client exposes last token usage, use it as a
+	// baseline and add a small estimate for the newly added user message.
 
-	logger.DebugWithIcon("📊", "Token usage check",
-		"current_tokens", totalTokens,
+	// Helper to estimate tokens from message content (rough heuristic ~4 chars/token)
+	estimateTokensFor := func(msg message.Message) int {
+		// Combine primary content and thinking text for a conservative estimate
+		content := msg.Content()
+		if t := msg.Thinking(); t != "" {
+			content += "\n" + t
+		}
+		// Count only text; images are ignored (older ones truncated already)
+		// Add small per-message overhead
+		approx := int(math.Ceil(float64(len(content))/4.0)) + 8
+		if approx < 0 { // safety for overflows (unlikely)
+			approx = 0
+		}
+		return approx
+	}
+
+	messages := c.Messages
+
+	// 1) Message-count-based safeguard: if conversation is very long, compact regardless of tokens
+	const maxMessagesThreshold = 50
+	if len(messages) > maxMessagesThreshold {
+		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Message count exceeds threshold, performing compaction",
+			"count", len(messages), "threshold", maxMessagesThreshold)
+		return c.performCompaction(ctx, llm)
+	}
+
+	// 2) Token-usage estimate
+	var estimatedInputTokens int
+
+	// If the client provides last token usage (input tokens for last call), start from that
+	if usageProvider, ok := llm.(domain.TokenUsageProvider); ok {
+		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+			estimatedInputTokens = usage.InputTokens
+			// Add estimate for the newest user message if present (added before compaction)
+			if len(messages) > 0 {
+				last := messages[len(messages)-1]
+				if last.Type() == message.MessageTypeUser {
+					estimatedInputTokens += estimateTokensFor(last)
+				}
+			}
+		}
+	}
+
+	// Fallback: estimate from all messages' content if we don't have recent telemetry
+	if estimatedInputTokens == 0 {
+		for _, m := range messages {
+			estimatedInputTokens += estimateTokensFor(m)
+		}
+	}
+
+	threshold := float64(maxTokens) * (thresholdPercent / 100.0)
+	usagePercent := (float64(estimatedInputTokens) / float64(maxTokens)) * 100
+
+	logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Estimated input token usage",
+		"estimated_input_tokens", estimatedInputTokens,
 		"max_tokens", maxTokens,
 		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
 		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent),
 		"threshold_tokens", int(threshold))
 
-	if float64(totalTokens) < threshold {
-		logger.DebugWithIcon("📊", "Token usage below threshold, skipping compaction",
+	if float64(estimatedInputTokens) < threshold {
+		logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Usage below threshold, skipping compaction",
 			"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
 			"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
-		return nil // Below threshold, no compaction needed
+		return nil
 	}
 
-	logger.InfoWithIcon("📊", "Token usage exceeds threshold, performing compaction",
+	logger.InfoWithIntention(pkgLogger.IntentionStatistics, "Estimated tokens exceed threshold, performing compaction",
 		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
 		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
 
-	// Perform the full compaction process
 	return c.performCompaction(ctx, llm)
 }
 
@@ -104,6 +157,9 @@ func (c *MessageState) GetTotalTokenUsage() (inputTokens, outputTokens, totalTok
 // performCompaction contains the original compaction logic
 func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) error {
 	messages := c.Messages
+
+	// Reset counters before compaction to avoid double counting across histories
+	c.ResetTokenCounters()
 
 	// Simple compaction strategy: keep recent messages, summarize older ones
 	const maxMessages = 50
@@ -125,7 +181,7 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 	// Create an LLM-generated summary of older messages (with vision truncation applied)
 	summary, err := c.createLLMSummary(ctx, llm, olderMessages)
 	if err != nil {
-		logger.WarnWithIcon("🤖", "Failed to create LLM summary, using fallback",
+		logger.Warn("Failed to create LLM summary, using fallback",
 			"error", err, "message_count", len(olderMessages))
 		summary = createBasicMessageSummary(olderMessages)
 	}
@@ -150,13 +206,19 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 	}
 
 	if skippedAlignment > 0 {
-		logger.DebugWithIcon("🧹", "Skipped alignment messages during compaction",
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Skipped alignment messages during compaction",
 			"skipped_count", skippedAlignment)
 	}
-	logger.InfoWithIcon("📝", "Message compaction completed",
+	logger.InfoWithIntention(pkgLogger.IntentionStatus, "Message compaction completed",
 		"before_count", len(messages),
 		"after_count", len(c.Messages),
 		"compression_ratio", fmt.Sprintf("%.1f%%", float64(len(c.Messages))/float64(len(messages))*100))
+
+	// Update token counters based on current messages (sum of input+output)
+	c.RecalculateTokenCountersFromMessages()
+	in, out, total := c.TokenCountersSnapshot()
+	logger.InfoWithIntention(pkgLogger.IntentionStatistics, "Token counters updated after compaction",
+		"input_tokens", in, "output_tokens", out, "total_tokens", total)
 
 	return nil
 }
@@ -282,7 +344,7 @@ Summary:`, conversationBuilder.String())
 
 	// Use LLM to create summary
 	summaryMessage := message.NewChatMessage(message.MessageTypeUser, summaryPrompt)
-	response, err := llm.Chat(ctx, []message.Message{summaryMessage}, false) // Summary doesn't need thinking
+	response, err := llm.Chat(ctx, []message.Message{summaryMessage}, false, nil) // Summary doesn't need thinking
 	if err != nil {
 		return "", fmt.Errorf("failed to generate LLM summary: %w", err)
 	}
@@ -350,12 +412,4 @@ func createBasicMessageSummary(messages []message.Message) string {
 // isAlignmentMessage checks if a message was injected by the Aligner and should be removed during compaction
 func isAlignmentMessage(msg message.Message) bool {
 	return msg.Source() == message.MessageSourceAligner
-}
-
-// truncateContent truncates content to specified length with ellipsis
-func truncateContent(content string, maxLen int) string {
-	if len(content) <= maxLen {
-		return content
-	}
-	return content[:maxLen-3] + "..."
 }

@@ -1,4 +1,4 @@
-package agent
+package app
 
 import (
 	"context"
@@ -17,11 +17,11 @@ type mockToolCallingLLM struct {
 	toolManager domain.ToolManager
 }
 
-func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
 
-func (m *mockToolCallingLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (m *mockToolCallingLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
 
@@ -32,6 +32,8 @@ func (m *mockToolCallingLLM) SetToolManager(toolManager domain.ToolManager) {
 func (m *mockToolCallingLLM) GetToolManager() domain.ToolManager {
 	return m.toolManager
 }
+
+func (m *mockToolCallingLLM) ModelID() string { return "mock-llm" }
 
 // TestInvokeWithScenario tests the new direct scenario invocation method
 func TestInvokeWithScenario(t *testing.T) {

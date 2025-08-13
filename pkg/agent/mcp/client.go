@@ -76,7 +76,7 @@ func (w *MCPClientWrapper) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
-	logger.InfoWithIcon("✅", "Successfully connected to MCP server", "server", w.config.Name)
+	logger.InfoWithIntention(pkgLogger.IntentionSuccess, "Successfully connected to MCP server", "server", w.config.Name)
 	return nil
 }
 

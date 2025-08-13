@@ -9,8 +9,11 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 )
+
+var geminiLogger = pkgLogger.NewComponentLogger("gemini-client")
 
 // GeminiCore holds shared resources for Gemini clients
 type GeminiCore struct {
@@ -23,6 +26,11 @@ type GeminiCore struct {
 type GeminiClient struct {
 	*GeminiCore
 	toolManager domain.ToolManager
+
+	// Telemetry and caching/session hints
+	lastUsage message.TokenUsage
+	sessionID string
+	cacheOpts domain.ModelSideCacheOptions
 }
 
 // NewGeminiClient creates a new Gemini client with the specified model
@@ -72,8 +80,36 @@ func NewGeminiClientFromCore(core *GeminiCore) *GeminiClient {
 	}
 }
 
+// ModelIdentifier implementation
+func (c *GeminiClient) ModelID() string { return c.model }
+
+// ContextWindowProvider implementation
+func (c *GeminiClient) MaxContextTokens() int {
+	caps := getModelCapabilities(c.model)
+	if caps.MaxContextWindow > 0 {
+		return caps.MaxContextWindow
+	}
+	// Conservative default for Gemini 2.5 family
+	return 1048576
+}
+
+// TokenUsageProvider implementation
+func (c *GeminiClient) LastTokenUsage() (message.TokenUsage, bool) {
+	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
+		return c.lastUsage, true
+	}
+	return message.TokenUsage{}, false
+}
+
+// SessionAware implementation
+func (c *GeminiClient) SetSessionID(id string) { c.sessionID = id }
+func (c *GeminiClient) SessionID() string      { return c.sessionID }
+
+// ModelSideCacheConfigurator implementation (store hints for later use)
+func (c *GeminiClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions) { c.cacheOpts = opts }
+
 // Chat implements the basic LLM interface with thinking control
-func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert internal messages to Gemini format
 	geminiContents := make([]*genai.Content, 0)
 	var systemInstruction *genai.Content
@@ -122,7 +158,7 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 		}
 
 		// Use streaming for progressive thinking display (no tool handling in basic chat)
-		return c.chatWithStreaming(ctx, geminiContents, config, true, false)
+		return c.chatWithStreaming(ctx, geminiContents, config, true, false, enableThinking, thinkingChan)
 	}
 
 	// Generate content using the Models interface (non-streaming)
@@ -139,16 +175,21 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 		totalTokens := resp.UsageMetadata.TotalTokenCount
 		utilizationPct := float64(outputTokens) / float64(maxTokens) * 100
 
-		fmt.Printf("DEBUG: Gemini API Usage - Input: %d tokens, Output: %d tokens, Total: %d tokens, Model: %s\n",
-			inputTokens, outputTokens, totalTokens, c.model)
-		fmt.Printf("DEBUG: Token Utilization - %.1f%% of max output tokens (%d/%d)\n",
-			utilizationPct, outputTokens, maxTokens)
+		// Store token usage for telemetry consumers
+		c.lastUsage = message.TokenUsage{
+			InputTokens:  int(inputTokens),
+			OutputTokens: int(outputTokens),
+			TotalTokens:  int(totalTokens),
+		}
+
+		geminiLogger.DebugWithIntention(pkgLogger.IntentionStatistics, "Gemini API Usage", "input_tokens", inputTokens, "output_tokens", outputTokens, "total_tokens", totalTokens, "model", c.model)
+		geminiLogger.DebugWithIntention(pkgLogger.IntentionStatistics, "Token utilization", "percent", fmt.Sprintf("%.1f", utilizationPct), "output", outputTokens, "max_output", maxTokens)
 
 		// Warn if we're approaching the limit
 		if utilizationPct > 90 {
-			fmt.Printf("⚠️  WARNING: Very high token usage (%.1f%%) - potential truncation risk!\n", utilizationPct)
+			geminiLogger.Warn("Very high token usage - potential truncation risk!", "percent", fmt.Sprintf("%.1f", utilizationPct))
 		} else if utilizationPct > 80 {
-			fmt.Printf("⚠️  WARNING: High token usage (%.1f%%) - approaching limit\n", utilizationPct)
+			geminiLogger.Warn("High token usage - approaching limit", "percent", fmt.Sprintf("%.1f", utilizationPct))
 		}
 	}
 
@@ -173,14 +214,13 @@ func (c *GeminiClient) isThinkingCapable() bool {
 
 // chatWithStreaming handles streaming generation with progressive thinking display
 // The handleTools parameter controls whether to process function calls or treat them as regular text
-func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool, handleTools bool) (message.Message, error) {
+func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool, handleTools bool, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Create streaming generator
 	stream := c.client.Models.GenerateContentStream(ctx, c.model, contents, config)
 
 	var responseText strings.Builder
 	var thinkingText strings.Builder
-	hasShownThinkingHeader := false
-	var toolCalls []any // To collect any tool calls
+	var toolCalls []*genai.FunctionCall // Collect multiple tool calls
 
 	// Process streaming responses using the iter.Seq2 pattern
 	for resp, err := range stream {
@@ -201,15 +241,10 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 				// Handle regular text content
 				if part.Text != "" {
 					if showThinking {
-						// Show thinking header only once
-						if !hasShownThinkingHeader {
-							fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-							hasShownThinkingHeader = true
+						// Send thinking content to channel if enabled
+						if enableThinking && thinkingChan != nil {
+							message.SendThinkingContent(thinkingChan, part.Text)
 						}
-
-						// Display progressive text in light gray
-						fmt.Printf("\x1b[90m%s", part.Text) // Light gray
-						os.Stdout.Sync() // Force flush
 					}
 
 					// Accumulate all text
@@ -219,23 +254,25 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 		}
 	}
 
-	// Reset color and add newline if we showed thinking
-	if hasShownThinkingHeader {
-		fmt.Print("\x1b[0m\n") // Reset color
+	// Signal end of thinking if we accumulated thinking content
+	if thinkingText.Len() > 0 && enableThinking && thinkingChan != nil {
+		message.EndThinking(thinkingChan)
 	}
 
 	// Check if we have tool calls to return (only when tool handling is enabled)
 	if handleTools && len(toolCalls) > 0 {
-		// Return the first tool call (following existing pattern)
-		if functionCall, ok := toolCalls[0].(*genai.FunctionCall); ok {
-			// Convert function call arguments
-			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(functionCall.Args))
-
-			return message.NewToolCallMessage(
-				message.ToolName(functionCall.Name),
-				args,
-			), nil
+		// Build messages for all collected function calls
+		if len(toolCalls) == 1 {
+			fc := toolCalls[0]
+			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(fc.Args))
+			return message.NewToolCallMessage(message.ToolName(fc.Name), args), nil
 		}
+		calls := make([]*message.ToolCallMessage, 0, len(toolCalls))
+		for _, fc := range toolCalls {
+			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(fc.Args))
+			calls = append(calls, message.NewToolCallMessage(message.ToolName(fc.Name), args))
+		}
+		return message.NewToolCallBatch(calls), nil
 	}
 
 	finalText := responseText.String()
@@ -274,7 +311,7 @@ func (c *GeminiClient) IsToolCapable() bool {
 }
 
 // ChatWithToolChoice implements ToolCallingLLM interface with tool manager integration
-func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert internal messages to Gemini format
 	geminiContents := make([]*genai.Content, 0)
 	var systemInstruction *genai.Content
@@ -321,6 +358,10 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 				resultText := "[Function result: " + toolResultMsg.Content() + "]"
 				geminiContents = append(geminiContents, genai.NewContentFromText(resultText, genai.RoleUser))
 			}
+
+		case message.MessageTypeToolCallBatch:
+			// Skip batch containers; individual calls/results are already in the transcript
+			continue
 		}
 	}
 
@@ -352,9 +393,9 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		}
-		
+
 		// Use streaming for progressive thinking display with tool handling enabled
-		return c.chatWithStreaming(ctx, geminiContents, config, true, true)
+		return c.chatWithStreaming(ctx, geminiContents, config, true, true, enableThinking, thinkingChan)
 	}
 
 	// Generate content using the Models interface (non-streaming)
@@ -384,22 +425,32 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
+	// Capture token usage if available
+	if resp.UsageMetadata != nil {
+		c.lastUsage = message.TokenUsage{
+			InputTokens:  int(resp.UsageMetadata.PromptTokenCount),
+			OutputTokens: int(resp.UsageMetadata.CandidatesTokenCount),
+			TotalTokens:  int(resp.UsageMetadata.TotalTokenCount),
+		}
+	}
+
 	if len(resp.Candidates) == 0 {
 		return nil, fmt.Errorf("no response from Gemini")
 	}
 
-	// Check if response contains function calls
-	if len(resp.Candidates[0].Content.Parts) > 0 {
+	// Check if response contains function calls (collect all)
+	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil && len(resp.Candidates[0].Content.Parts) > 0 {
+		var calls []*message.ToolCallMessage
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if functionCall := part.FunctionCall; functionCall != nil {
-				// Convert function call arguments
 				args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(functionCall.Args))
-
-				return message.NewToolCallMessage(
-					message.ToolName(functionCall.Name),
-					args,
-				), nil
+				calls = append(calls, message.NewToolCallMessage(message.ToolName(functionCall.Name), args))
 			}
+		}
+		if len(calls) == 1 {
+			return calls[0], nil
+		} else if len(calls) > 1 {
+			return message.NewToolCallBatch(calls), nil
 		}
 	}
 

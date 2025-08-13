@@ -1,3 +1,0 @@
-Create a complete Go program that generates and prints the first 10 Fibonacci numbers. Save it as main.go. The program should output the numbers separated by spaces on a single line.
-----
-Modify the program to accept a command line argument for the number of Fibonacci numbers to generate. If no argument is provided, default to 10.

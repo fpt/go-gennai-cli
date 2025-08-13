@@ -7,6 +7,7 @@ import (
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/agent/mcp"
+	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
 )
@@ -64,11 +65,10 @@ func (m *MCPEnhancedToolManager) AddServer(ctx context.Context, config domain.MC
 
 	// Load tools from the server
 	if err := m.loadToolsFromServer(ctx, config.Name, mcpClient); err != nil {
-		logger.WarnWithIcon("⚠️", "Failed to load tools from MCP server",
+		logger.Warn("Failed to load tools from MCP server",
 			"server", config.Name, "error", err)
 	}
 
-	logger.InfoWithIcon("✅", "MCP server added successfully", "server", config.Name)
 	return nil
 }
 
@@ -80,7 +80,7 @@ func (m *MCPEnhancedToolManager) RemoveServer(serverName string) error {
 	// Close the client connection
 	if client, exists := m.servers[serverName]; exists {
 		if err := client.Close(); err != nil {
-			logger.WarnWithIcon("⚠️", "Error closing MCP server connection",
+			logger.Warn("Error closing MCP server connection",
 				"server", serverName, "error", err)
 		}
 	}
@@ -93,7 +93,7 @@ func (m *MCPEnhancedToolManager) RemoveServer(serverName string) error {
 	// Remove all tools from this server from the main tool manager
 	m.removeMCPToolsFromServer(serverName)
 
-	logger.InfoWithIcon("🗑️", "MCP server removed", "server", serverName)
+	logger.DebugWithIntention(pkgLogger.IntentionStatus, "MCP server removed", "server", serverName)
 	return nil
 }
 
@@ -133,7 +133,7 @@ func (m *MCPEnhancedToolManager) RefreshTools(ctx context.Context) error {
 	var lastError error
 	for _, serverName := range servers {
 		if err := m.refreshToolsFromServer(ctx, serverName); err != nil {
-			logger.WarnWithIcon("⚠️", "Failed to refresh tools from MCP server",
+			logger.Warn("Failed to refresh tools from MCP server",
 				"server", serverName, "error", err)
 			lastError = err
 		}
@@ -258,7 +258,7 @@ func (m *MCPEnhancedToolManager) loadToolsFromServer(ctx context.Context, server
 		for _, toolName := range config.AllowedTools {
 			allowedToolsSet[toolName] = true
 		}
-		logger.DebugWithIcon("🔧", "MCP server tool filtering enabled",
+		logger.DebugWithIntention(pkgLogger.IntentionTool, "MCP server tool filtering enabled",
 			"server", serverName,
 			"allowed_count", len(config.AllowedTools),
 			"allowed_tools", config.AllowedTools)
@@ -280,7 +280,7 @@ func (m *MCPEnhancedToolManager) loadToolsFromServer(ctx context.Context, server
 
 		// Register the tool in the main tool manager
 		m.tools[adapter.Name()] = adapter
-		logger.DebugWithIcon("🔧", "MCP tool registered",
+		logger.DebugWithIntention(pkgLogger.IntentionTool, "MCP tool registered",
 			"server", serverName, "tool", adapter.Name())
 	}
 
@@ -288,12 +288,12 @@ func (m *MCPEnhancedToolManager) loadToolsFromServer(ctx context.Context, server
 	m.mcpTools[serverName] = tools
 
 	if filteredCount > 0 {
-		logger.InfoWithIcon("🔧", "MCP tools loaded with filtering",
+		logger.InfoWithIntention(pkgLogger.IntentionTool, "MCP tools loaded with filtering",
 			"server", serverName,
 			"loaded_count", len(tools),
 			"filtered_count", filteredCount)
 	} else {
-		logger.InfoWithIcon("🔧", "MCP tools loaded",
+		logger.InfoWithIntention(pkgLogger.IntentionTool, "MCP tools loaded",
 			"server", serverName, "count", len(tools))
 	}
 	return nil
@@ -323,7 +323,7 @@ func (m *MCPEnhancedToolManager) removeMCPToolsFromServer(serverName string) {
 		for _, tool := range tools {
 			// Remove the tool by its registered name
 			delete(m.tools, tool.Name())
-			logger.DebugWithIcon("🗑️", "MCP tool removed",
+			logger.DebugWithIntention(pkgLogger.IntentionDebug, "MCP tool removed",
 				"server", serverName, "tool", tool.Name())
 		}
 	}

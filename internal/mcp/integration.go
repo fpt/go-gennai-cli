@@ -89,7 +89,7 @@ func (i *Integration) Close() error {
 	servers := i.toolManager.ListServers()
 	for _, serverName := range servers {
 		if err := i.toolManager.RemoveServer(serverName); err != nil {
-			logger.WarnWithIcon("⚠️", "Error closing MCP server", "server", serverName, "error", err)
+			logger.Warn("Error closing MCP server", "server", serverName, "error", err)
 		}
 	}
 	return nil
