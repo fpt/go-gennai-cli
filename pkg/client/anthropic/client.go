@@ -130,8 +130,8 @@ func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []mes
 		}
 	}
 	
-	// Enable thinking with streaming for progressive display only if no tool results
-	if !hasToolResults {
+	// Enable thinking with streaming for progressive display only if no tool results and model supports it
+	if !hasToolResults && supportsThinking(c.model) {
 		// Add thinking configuration to the message params with minimum required budget
 		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
 			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
@@ -226,8 +226,8 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, 
 		Tools:     tools,
 	}
 
-	// Enable thinking with streaming for progressive display
-	if enableThinking {
+	// Enable thinking with streaming for progressive display only if model supports it
+	if enableThinking && supportsThinking(c.model) {
 		// Add thinking configuration to the message params with minimum required budget
 		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
 			OfEnabled: &anthropic.ThinkingConfigEnabledParam{

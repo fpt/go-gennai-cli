@@ -53,6 +53,54 @@ func TestGetAnthropicModel(t *testing.T) {
 	}
 }
 
+func TestSupportsThinking(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    string
+		expected bool
+	}{
+		{
+			name:     "claude-opus-4 supports thinking",
+			model:    "claude-opus-4-20250514",
+			expected: true,
+		},
+		{
+			name:     "claude-sonnet-4 supports thinking",
+			model:    "claude-sonnet-4-20250514",
+			expected: true,
+		},
+		{
+			name:     "claude-3-7-sonnet supports thinking",
+			model:    "claude-3-7-sonnet-latest",
+			expected: true,
+		},
+		{
+			name:     "claude-3-5-haiku does NOT support thinking",
+			model:    "claude-3-5-haiku-latest",
+			expected: false,
+		},
+		{
+			name:     "unknown model defaults to thinking support",
+			model:    "unknown-model",
+			expected: true,
+		},
+		{
+			name:     "empty string defaults to thinking support",
+			model:    "",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := supportsThinking(tt.model)
+			if result != tt.expected {
+				t.Errorf("supportsThinking(%q) = %v, want %v", tt.model, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestConvertToolChoiceToAnthropic(t *testing.T) {
 	tests := []struct {
 		name     string

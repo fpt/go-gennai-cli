@@ -31,6 +31,23 @@ func getAnthropicModel(model string) anthropic.Model {
 	return anthropic.ModelClaude3_7SonnetLatest
 }
 
+// supportsThinking checks if the model supports thinking functionality
+func supportsThinking(model string) bool {
+	switch model {
+	case "claude-opus-4-20250514":
+		return true
+	case "claude-sonnet-4-20250514":
+		return true
+	case "claude-3-7-sonnet-latest":
+		return true
+	case "claude-3-5-haiku-latest":
+		return false // Haiku doesn't support thinking
+	}
+
+	// Default to true for Sonnet models (conservative approach)
+	return true
+}
+
 // convertToolChoiceToAnthropic converts domain ToolChoice to Anthropic format
 func convertToolChoiceToAnthropic(toolChoice domain.ToolChoice) anthropic.ToolChoiceUnionParam {
 	switch toolChoice.Type {
