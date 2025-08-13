@@ -173,7 +173,7 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 
 		if len(tools) > 0 {
 			params.Tools = tools
-			
+
 			// Set tool choice based on the provided configuration
 			toolChoiceParam := convertToolChoiceToOpenAI(toolChoice)
 			if toolChoiceParam != nil {

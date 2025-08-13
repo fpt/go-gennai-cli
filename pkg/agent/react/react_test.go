@@ -372,6 +372,9 @@ func (u *unexpectedMessage) String() string                { return fmt.Sprintf(
 func (u *unexpectedMessage) TruncatedString() string {
 	return fmt.Sprintf("[unexpected] %s", u.content)
 }
+func (u *unexpectedMessage) Metadata() map[string]any {
+	return nil
+}
 
 // Token usage methods (required by Message interface)
 func (u *unexpectedMessage) InputTokens() int                                         { return 0 }

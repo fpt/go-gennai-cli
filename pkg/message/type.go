@@ -96,4 +96,7 @@ type Message interface {
 
 	// SetTokenUsage sets the token usage information for this message
 	SetTokenUsage(inputTokens, outputTokens, totalTokens int)
+
+	// Metadata returns the metadata map for the message
+	Metadata() map[string]any
 }

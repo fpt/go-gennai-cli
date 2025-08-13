@@ -161,6 +161,14 @@ func (c *ChatMessage) SetTokenUsage(inputTokens, outputTokens, totalTokens int) 
 	}
 }
 
+// Metadata returns the metadata map for the message
+func (c *ChatMessage) Metadata() map[string]any {
+	if c.metadata == nil {
+		return make(map[string]any)
+	}
+	return c.metadata
+}
+
 // TruncatedString returns a truncated, user-friendly representation for conversation previews
 func (c *ChatMessage) TruncatedString() string {
 	content := c.content

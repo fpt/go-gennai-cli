@@ -29,6 +29,47 @@ func NewToolCallMessage(toolName ToolName, toolArgs ToolArgumentValues) *ToolCal
 	}
 }
 
+// NewToolCallMessageWithThinking creates a new tool call message with thinking content
+func NewToolCallMessageWithThinking(toolName ToolName, toolArgs ToolArgumentValues, thinkingContent string) *ToolCallMessage {
+	return &ToolCallMessage{
+		ChatMessage: ChatMessage{
+			id:         generateMessageID(),
+			typ:        MessageTypeToolCall,
+			content:    fmt.Sprintf("Calling tool: %s with args: %v", toolName, toolArgs),
+			thinking:   thinkingContent,
+			timestamp:  time.Now(),
+			source:     MessageSourceDefault,
+			tokenUsage: TokenUsage{}, // Initialize empty token usage
+		},
+		name:      toolName,
+		arguments: toolArgs,
+	}
+}
+
+// NewToolCallMessageWithThinkingAndSignature creates a new tool call message with thinking content and signature
+func NewToolCallMessageWithThinkingAndSignature(toolName ToolName, toolArgs ToolArgumentValues, thinkingContent, signature string) *ToolCallMessage {
+	// Store signature in metadata for later use when converting back to Anthropic format
+	metadata := map[string]any{}
+	if signature != "" {
+		metadata["anthropic_thinking_signature"] = signature
+	}
+	
+	return &ToolCallMessage{
+		ChatMessage: ChatMessage{
+			id:         generateMessageID(),
+			typ:        MessageTypeToolCall,
+			content:    fmt.Sprintf("Calling tool: %s with args: %v", toolName, toolArgs),
+			thinking:   thinkingContent,
+			timestamp:  time.Now(),
+			source:     MessageSourceDefault,
+			metadata:   metadata,
+			tokenUsage: TokenUsage{}, // Initialize empty token usage
+		},
+		name:      toolName,
+		arguments: toolArgs,
+	}
+}
+
 // NewToolCallMessageWithID creates a new tool call message with specific ID (for session restoration)
 func NewToolCallMessageWithID(id string, toolName ToolName, toolArgs ToolArgumentValues, timestamp time.Time) *ToolCallMessage {
 	return &ToolCallMessage{

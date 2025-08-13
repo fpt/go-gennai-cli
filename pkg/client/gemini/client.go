@@ -209,7 +209,7 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 
 						// Display progressive text in light gray
 						fmt.Printf("\x1b[90m%s", part.Text) // Light gray
-						os.Stdout.Sync() // Force flush
+						os.Stdout.Sync()                    // Force flush
 					}
 
 					// Accumulate all text
@@ -352,7 +352,7 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		}
-		
+
 		// Use streaming for progressive thinking display with tool handling enabled
 		return c.chatWithStreaming(ctx, geminiContents, config, true, true)
 	}
