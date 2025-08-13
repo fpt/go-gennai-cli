@@ -407,6 +407,8 @@ func (m *BashToolManager) handleRunGrep(ctx context.Context, args message.ToolAr
 		grepArgs = append(grepArgs, "--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=vendor")
 	}
 
+	// Use -F for literal string matching to avoid regex issues
+	grepArgs = append(grepArgs, "-F") // Fixed strings (literal) instead of regex
 	grepArgs = append(grepArgs, pattern, path)
 
 	cmd := exec.CommandContext(ctx, "grep", grepArgs...)

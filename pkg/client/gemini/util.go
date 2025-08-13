@@ -24,8 +24,8 @@ func getGeminiModel(model string) string {
 		if isValidGeminiModel(model) {
 			return model
 		}
-		// Default to Gemini 2.5 Flash Lite for unknown models (most cost-effective)
-		return modelGemini25FlashLite
+		// Default to Gemini 2.5 Flash for unknown models (most balanced)
+		return modelGemini25Flash
 	}
 }
 

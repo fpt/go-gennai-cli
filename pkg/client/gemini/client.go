@@ -121,8 +121,8 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 			IncludeThoughts: true,
 		}
 
-		// Use streaming for progressive thinking display
-		return c.chatWithStreaming(ctx, geminiContents, config, true)
+		// Use streaming for progressive thinking display (no tool handling in basic chat)
+		return c.chatWithStreaming(ctx, geminiContents, config, true, false)
 	}
 
 	// Generate content using the Models interface (non-streaming)
@@ -172,13 +172,15 @@ func (c *GeminiClient) isThinkingCapable() bool {
 }
 
 // chatWithStreaming handles streaming generation with progressive thinking display
-func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool) (message.Message, error) {
+// The handleTools parameter controls whether to process function calls or treat them as regular text
+func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool, handleTools bool) (message.Message, error) {
 	// Create streaming generator
 	stream := c.client.Models.GenerateContentStream(ctx, c.model, contents, config)
 
 	var responseText strings.Builder
 	var thinkingText strings.Builder
 	hasShownThinkingHeader := false
+	var toolCalls []any // To collect any tool calls
 
 	// Process streaming responses using the iter.Seq2 pattern
 	for resp, err := range stream {
@@ -186,29 +188,31 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 			return nil, fmt.Errorf("Gemini streaming error: %w", err)
 		}
 
-		// Handle thinking content if present
+		// Handle content candidates
 		if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil {
 			for _, part := range resp.Candidates[0].Content.Parts {
-				// Check for thinking content in the part
-				if part.Text != "" && showThinking {
-					// Check if this looks like thinking content (this is a heuristic)
-					// Gemini may include thinking in regular text or separate fields
+				// Handle function calls if tool handling is enabled
+				if handleTools && part.FunctionCall != nil {
+					// Collect tool calls for later processing
+					toolCalls = append(toolCalls, part.FunctionCall)
+					continue
+				}
 
-					// For now, treat all streaming text as potentially containing thinking
-					// Show thinking header only once
-					if !hasShownThinkingHeader {
-						fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-						hasShownThinkingHeader = true
+				// Handle regular text content
+				if part.Text != "" {
+					if showThinking {
+						// Show thinking header only once
+						if !hasShownThinkingHeader {
+							fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
+							hasShownThinkingHeader = true
+						}
+
+						// Display progressive text in light gray
+						fmt.Printf("\x1b[90m%s", part.Text) // Light gray
+						os.Stdout.Sync() // Force flush
 					}
 
-					// Display progressive text in light gray
-					fmt.Printf("\x1b[90m%s", part.Text) // Light gray
-					os.Stdout.Sync()                    // Force flush
-
-					// Accumulate all text for now
-					responseText.WriteString(part.Text)
-				} else if part.Text != "" && !showThinking {
-					// Regular streaming without thinking display
+					// Accumulate all text
 					responseText.WriteString(part.Text)
 				}
 			}
@@ -218,6 +222,20 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 	// Reset color and add newline if we showed thinking
 	if hasShownThinkingHeader {
 		fmt.Print("\x1b[0m\n") // Reset color
+	}
+
+	// Check if we have tool calls to return (only when tool handling is enabled)
+	if handleTools && len(toolCalls) > 0 {
+		// Return the first tool call (following existing pattern)
+		if functionCall, ok := toolCalls[0].(*genai.FunctionCall); ok {
+			// Convert function call arguments
+			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(functionCall.Args))
+
+			return message.NewToolCallMessage(
+				message.ToolName(functionCall.Name),
+				args,
+			), nil
+		}
 	}
 
 	finalText := responseText.String()
@@ -329,7 +347,17 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
-	// Generate content using the Models interface
+	// Enable thinking for tool calling as well
+	if c.isThinkingCapable() {
+		config.ThinkingConfig = &genai.ThinkingConfig{
+			IncludeThoughts: true,
+		}
+		
+		// Use streaming for progressive thinking display with tool handling enabled
+		return c.chatWithStreaming(ctx, geminiContents, config, true, true)
+	}
+
+	// Generate content using the Models interface (non-streaming)
 	resp, err := c.client.Models.GenerateContent(ctx, c.model, geminiContents, config)
 	if err != nil {
 		return nil, fmt.Errorf("Gemini API call failed: %w", err)
