@@ -67,13 +67,20 @@ type ScenarioRunner struct {
 
 // NewScenarioRunner creates a new ScenarioRunner with MCP tools, settings, and additional scenario paths
 func NewScenarioRunner(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, additionalScenarioPaths ...string) *ScenarioRunner {
-	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, false, additionalScenarioPaths...)
+	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, false, true, additionalScenarioPaths...)
 }
 
 // NewScenarioRunnerWithOptions creates a new ScenarioRunner with session control options
-func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, skipSessionRestore bool, additionalScenarioPaths ...string) *ScenarioRunner {
+func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, skipSessionRestore bool, isInteractiveMode bool, additionalScenarioPaths ...string) *ScenarioRunner {
 	// Create individual managers for universal tool manager
-	todoToolManager := tool.NewTodoToolManager(workingDir)
+	// Only create persistent todo manager in interactive mode
+	var todoToolManager *tool.TodoToolManager
+	if isInteractiveMode {
+		todoToolManager = tool.NewTodoToolManager(workingDir)
+	} else {
+		// For one-shot mode, create an in-memory-only todo manager
+		todoToolManager = tool.NewInMemoryTodoToolManager()
+	}
 
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
@@ -102,29 +109,35 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	sharedState := state.NewMessageState()
 	var sessionFilePath string
 
-	// Try to get session file path for persistence
-	if userConfig, err := config.DefaultUserConfig(); err == nil {
-		if sessionPath, err := userConfig.GetProjectSessionFile(workingDir); err == nil {
-			sessionFilePath = sessionPath
-			// Only restore session if not skipped (for -f flag isolation)
-			if !skipSessionRestore {
-				// Try to load existing session state
-				if err := sharedState.LoadFromFile(sessionFilePath); err != nil {
-					logger.DebugWithIcon("🔄", "Starting with new session",
-						"reason", "could not load existing session", "error", err)
+	// Only handle session persistence in interactive mode
+	if isInteractiveMode {
+		// Try to get session file path for persistence
+		if userConfig, err := config.DefaultUserConfig(); err == nil {
+			if sessionPath, err := userConfig.GetProjectSessionFile(workingDir); err == nil {
+				sessionFilePath = sessionPath
+				// Only restore session if not skipped (for -f flag isolation)
+				if !skipSessionRestore {
+					// Try to load existing session state
+					if err := sharedState.LoadFromFile(sessionFilePath); err != nil {
+						logger.DebugWithIcon("🔄", "Starting with new session",
+							"reason", "could not load existing session", "error", err)
+					} else {
+						logger.InfoWithIcon("📚", "Restored session state",
+							"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
+					}
 				} else {
-					logger.InfoWithIcon("📚", "Restored session state",
-						"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
+					logger.DebugWithIcon("🔄", "Starting with clean session",
+						"reason", "session restore skipped for file mode")
 				}
 			} else {
-				logger.DebugWithIcon("🔄", "Starting with clean session",
-					"reason", "session restore skipped for file mode")
+				logger.WarnWithIcon("⚠️", "Could not get session file path", "error", err)
 			}
 		} else {
-			logger.WarnWithIcon("⚠️", "Could not get session file path", "error", err)
+			logger.WarnWithIcon("⚠️", "Could not access user config for session persistence", "error", err)
 		}
 	} else {
-		logger.WarnWithIcon("⚠️", "Could not access user config for session persistence", "error", err)
+		// One-shot mode: no session persistence, always start clean
+		logger.DebugWithIcon("🔄", "Starting with clean session", "reason", "one-shot mode")
 	}
 
 	return &ScenarioRunner{

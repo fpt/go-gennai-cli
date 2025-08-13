@@ -12,7 +12,6 @@ import (
 type UserConfig struct {
 	BaseDir     string // $HOME/.gennai
 	ProjectsDir string // $HOME/.gennai/projects
-	TodosDir    string // $HOME/.gennai/todos
 	ConfigFile  string // $HOME/.gennai/config.json
 }
 
@@ -28,7 +27,6 @@ func DefaultUserConfig() (*UserConfig, error) {
 	config := &UserConfig{
 		BaseDir:     baseDir,
 		ProjectsDir: filepath.Join(baseDir, "projects"),
-		TodosDir:    filepath.Join(baseDir, "todos"),
 		ConfigFile:  filepath.Join(baseDir, "config.json"),
 	}
 
@@ -45,7 +43,6 @@ func (c *UserConfig) EnsureDirectories() error {
 	dirs := []string{
 		c.BaseDir,
 		c.ProjectsDir,
-		c.TodosDir,
 	}
 
 	for _, dir := range dirs {
@@ -108,10 +105,6 @@ func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "session.json"), nil
 }
 
-// GetGlobalTodoFile returns the global todo file path
-func (c *UserConfig) GetGlobalTodoFile() string {
-	return filepath.Join(c.TodosDir, "global_todos.json")
-}
 
 // generateProjectHash creates a safe directory name from a project path (Claude Code-style)
 func generateProjectHash(projectPath string) string {

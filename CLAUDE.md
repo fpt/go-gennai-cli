@@ -92,7 +92,7 @@ go mod tidy                        # Clean up dependencies
 
 ## User Configuration
 
-**gennai maintains per-user configuration and project data in `$HOME/.gennai/`:**
+**gennai maintains per-user configuration and project data in `$HOME/.gennai/` (interactive mode only):**
 
 ```
 $HOME/.gennai/
@@ -101,24 +101,40 @@ $HOME/.gennai/
 │       ├── project_info.txt   # Original project path and metadata
 │       ├── todos.json         # Project-specific todo list
 │       └── session.json       # Conversation history and context
-├── todos/                      # Global todos directory
-│   └── global_todos.json      # Global todo list (if needed)
 └── config.json                 # User preferences (future use)
 ```
 
 **Key Features:**
-- **Project Isolation**: Each project gets its own todo list, session data, and storage
-- **Session Persistence**: Conversation history is automatically saved and restored between runs (like Claude Code)
+- **Project Isolation**: Each project gets its own todo list, session data, and storage (interactive mode only)
+- **Session Persistence**: Conversation history is automatically saved and restored between interactive runs (like Claude Code)
 - **Safe Directory Names**: Project paths are converted to safe directory names with hash suffixes
-- **Cross-Session Persistence**: Todos, sessions, and project data persist between gennai runs
+- **Mode-Based Persistence**: Interactive mode uses persistent storage, one-shot mode uses in-memory only
 - **Clean Project Structure**: No configuration files clutter your project directories
-- **Automatic Creation**: User directories are created automatically when first needed
+- **Automatic Creation**: User directories are created automatically when first needed (interactive mode only)
 - **No Fallbacks**: Always uses `$HOME/.gennai/` - no local file fallbacks
 
 **Project Directory Naming:**
 Projects are stored in directories using the pattern: `{project-basename}-{path-hash}`
 - Example: `/Users/you/dev/my-app` → `my-app-a1b2c3d4/`
 - Handles name collisions and special characters safely
+
+**Mode-Specific Behavior:**
+
+**Interactive Mode (`gennai` with no arguments):**
+- Creates and uses project directories in `$HOME/.gennai/projects/`
+- Saves and restores conversation history between sessions
+- Maintains persistent todo lists per project
+- Session data preserved across invocations
+
+**One-Shot Mode (`gennai "your request"`):**
+- Uses in-memory storage only - no project directories created
+- No conversation history persistence
+- Todo lists work but are not saved to disk
+
+**File Mode (`gennai -f prompts.txt`):**
+- Similar to one-shot mode - no persistence
+- Each prompt file execution starts fresh
+- Designed for testing and batch processing
 
 ## Architecture
 
@@ -428,40 +444,6 @@ gennai --scenarios ./base-scenarios.yaml --scenarios ./override-scenarios.yaml "
 1. Built-in embedded scenarios (lowest priority)
 2. Additional scenario files/directories (higher priority - override built-ins)
 
-**Example YAML Configuration:**
-```yaml
-GENERATE:
-  tools: "filesystem, default, mcp:godevmcp"
-  description: "Code and content generation, file creation, project scaffolding"
-  prompt: |
-    Generate code or content for the following request:
-    
-    User Request: {{userInput}}
-    Reasoning: {{scenarioReason}}
-    Working Directory: {{workingDir}}
-    
-    Instructions:
-    - Create files, write code, or generate content as requested
-    - Follow best practices and include proper error handling
-    - Consider the project structure and existing patterns
-    - Use secure filesystem tools for file operations
-    - Use MCP godevmcp tools for Go-specific analysis and operations
-
-ANALYZE_CODE:
-  tools: "filesystem, default, mcp:godevmcp"
-  description: "Code structure and architecture analysis"
-  prompt: |
-    Analyze code for the following request:
-    
-    User Request: {{userInput}}
-    Reason: {{scenarioReason}}
-    Working Directory: {{workingDir}}
-    
-    Instructions:
-    - Use MCP tools to extract call graphs and dependencies
-    - Analyze code structure using godevmcp tools
-    - Use secure filesystem access to read source files safely
-```
 
 **Template Variables:**
 - `{{userInput}}` - The user's original request

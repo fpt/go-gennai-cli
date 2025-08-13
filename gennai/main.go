@@ -62,7 +62,6 @@ func printUsage() {
 	fmt.Println("  gennai --custom-scenarios ./my.yaml      # Use additional scenarios")
 	fmt.Println("  gennai -v \"Debug this issue\"             # Enable verbose debug logging")
 	fmt.Println("  gennai -l                                # Show conversation history")
-	fmt.Println("  gennai -c                                # Start with cleared history")
 	fmt.Println()
 }
 
@@ -81,8 +80,6 @@ func main() {
 	var scenarioPaths scenarioPathsFlag
 	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
 	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
-	var clearHistory = flag.Bool("c", false, "Clear conversation history before starting")
-	var clearHistoryLong = flag.Bool("clear", false, "Clear conversation history before starting")
 	var promptFile = flag.String("f", "", "File containing multi-turn prompts separated by '----' (no memory between turns)")
 	var verbose = flag.Bool("v", false, "Enable verbose logging (debug level)")
 	var verboseLong = flag.Bool("verbose", false, "Enable verbose logging (debug level)")
@@ -113,7 +110,6 @@ func main() {
 	resolvedModel := resolveStringFlag(*model, *modelLong)
 	resolvedScenario := resolveStringFlag(*scenario, *scenarioLong)
 	resolvedShowLog := *showLog || *showLogLong
-	resolvedClearHistory := *clearHistory || *clearHistoryLong
 	resolvedVerbose := *verbose || *verboseLong
 
 	// Get remaining arguments as the command
@@ -239,6 +235,8 @@ func main() {
 	var a *agent.ScenarioRunner
 	// Skip session restoration for file mode (-f flag) to ensure clean isolated tests
 	skipSessionRestore := (*promptFile != "")
+	// Determine if we're in interactive mode (affects project directory usage)
+	isInteractiveMode := len(args) == 0 && *promptFile == ""
 
 	if mcpIntegration != nil {
 		toolManager := mcpIntegration.GetToolManager()
@@ -250,7 +248,7 @@ func main() {
 			mcpToolManagers[serverName] = toolManager
 		}
 
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, scenarioPaths...)
+		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
 		stats := mcpIntegration.GetStats()
 		fmt.Printf("✅ MCP Integration: %d servers connected, %d tools available\n", stats.ConnectedServers, stats.TotalTools)
 
@@ -259,7 +257,7 @@ func main() {
 		fmt.Printf("🔧 Debug: Tool Manager has %d tools loaded\n", len(allTools))
 	} else {
 		mcpToolManagers := make(map[string]domain.ToolManager)
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, scenarioPaths...)
+		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
 
 		// Note: SimpleToolManager removed - tools now managed by specialized managers
 	}
@@ -272,12 +270,6 @@ func main() {
 	}
 
 	// Handle special command line options
-	if resolvedClearHistory {
-		// Clear conversation history before starting
-		a.ClearHistory()
-		fmt.Println("🧹 Conversation history cleared.")
-	}
-
 	if resolvedShowLog {
 		// Print conversation history and exit
 		conversationHistory := a.GetConversationPreview(1000) // Get full history

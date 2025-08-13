@@ -77,6 +77,24 @@ func NewTodoToolManagerWithPath(todoFilePath string) *TodoToolManager {
 	return manager
 }
 
+// NewInMemoryTodoToolManager creates a new todo tool manager that only stores data in memory (no persistence)
+func NewInMemoryTodoToolManager() *TodoToolManager {
+	manager := &TodoToolManager{
+		tools: make(map[message.ToolName]message.Tool),
+		todoState: &TodoState{
+			Items:    make([]TodoItem, 0),
+			filePath: "", // Empty path means no persistence
+		},
+	}
+
+	// No file loading for in-memory manager
+
+	// Register todo tools
+	manager.registerTodoTools()
+
+	return manager
+}
+
 // Implement domain.ToolManager interface
 func (m *TodoToolManager) GetTool(name message.ToolName) (message.Tool, bool) {
 	tool, exists := m.tools[name]
@@ -286,7 +304,8 @@ func (ts *TodoState) loadFromFile() error {
 
 func (ts *TodoState) saveToFile() error {
 	if ts.filePath == "" {
-		return fmt.Errorf("no file path specified")
+		// In-memory mode - no persistence, silently skip saving
+		return nil
 	}
 
 	data, err := json.MarshalIndent(ts, "", "  ")
