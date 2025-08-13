@@ -158,6 +158,44 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 		if result.Error != "" {
 			t.Errorf("Expected write success after read, got error: %s", result.Error)
 		}
+
+		// Test 4: Subsequent writes should succeed without re-reading (timestamp updated after write)
+		result, err = manager.handleWriteFile(ctx, map[string]any{
+			"path":    existingFile,
+			"content": "second modification without re-read",
+		})
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if result.Error != "" {
+			t.Errorf("Expected subsequent write success, got error: %s", result.Error)
+		}
+
+		// Test 5: Edit operations should also succeed after write (timestamp updated)
+		result, err = manager.handleEnhancedEdit(ctx, map[string]any{
+			"file_path":  existingFile,
+			"old_string": "second modification without re-read",
+			"new_string": "edited content after write",
+		})
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if result.Error != "" {
+			t.Errorf("Expected edit success after write, got error: %s", result.Error)
+		}
+
+		// Test 6: Multiple sequential edits should work
+		result, err = manager.handleEnhancedEdit(ctx, map[string]any{
+			"file_path":  existingFile,
+			"old_string": "edited content after write",
+			"new_string": "final edited content",
+		})
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if result.Error != "" {
+			t.Errorf("Expected sequential edit success, got error: %s", result.Error)
+		}
 	})
 
 	t.Run("TimestampValidation", func(t *testing.T) {

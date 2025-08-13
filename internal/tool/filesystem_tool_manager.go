@@ -422,6 +422,9 @@ func (m *FileSystemToolManager) handleWriteFile(ctx context.Context, args messag
 		return message.NewToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
+	// Update read timestamp after successful write to allow sequential edits
+	m.recordFileRead(path)
+
 	return message.NewToolResultText(fmt.Sprintf("Successfully wrote to %s", path)), nil
 }
 
@@ -518,6 +521,9 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to write file %s: %v", absPath, err)), nil
 	}
+
+	// Update read timestamp after successful edit to allow sequential edits
+	m.recordFileRead(absPath)
 
 	// Calculate change statistics for feedback
 	oldLines := strings.Count(oldString, "\n") + 1
