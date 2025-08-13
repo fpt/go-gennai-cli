@@ -392,12 +392,8 @@ func startInteractiveMode(ctx context.Context, a *agent.ScenarioRunner, scenario
 	defer rl.Close()
 
 	fmt.Println("\n🚀 Welcome to Gennai Interactive Mode!")
-	fmt.Println("💡 The ReAct agent will reason about your requests and take appropriate actions.")
-	fmt.Println("📝 Type your requests below, or use '/help' for commands.")
-	fmt.Println("🔧 All tool operations are automatically enabled.")
-	fmt.Println("⌨️  Use arrow keys to navigate, Ctrl+R for history search, Tab for completion.")
-	fmt.Println("✨ NEW: Type just '/' for an interactive command selector!")
 	fmt.Println("💬 Commands start with '/', everything else goes to the AI agent!")
+	fmt.Println("⌨️ Use arrow keys to navigate, Ctrl+R for history search, Tab for completion.")
 	fmt.Println(strings.Repeat("=", 60))
 
 	// Show conversation preview if there are existing messages

@@ -123,7 +123,13 @@ This is an example of [godevmcp](https://github.com/fpt/go-dev-mcp).
         "type": "stdio",
         "command": "godevmcp",
         "args": ["serve"],
-        "allowed_tools": ["tree_dir", "search_local_files", "read_godoc"]
+        "allowed_tools": [
+          "tree_dir",
+          "search_local_files",
+          "read_godoc",
+          "search_godoc",
+          "search_within_godoc"
+        ]
       }
     ]
   }
