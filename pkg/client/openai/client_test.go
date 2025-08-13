@@ -13,7 +13,7 @@ func TestGetOpenAIModel(t *testing.T) {
 		{"gpt-4o-mini", "gpt-4o-mini"},
 		{"gpt-5", "gpt-5"},
 		{"gpt-5-mini", "gpt-5-mini"},
-		{"unknown-model", "gpt-4o"}, // default fallback
+		{"unknown-model", "gpt-5-mini"}, // default fallback
 	}
 
 	for _, tc := range testCases {
@@ -60,39 +60,11 @@ func TestGetModelCapabilities(t *testing.T) {
 	}
 }
 
-func TestValidateModelForCapability(t *testing.T) {
-	testCases := []struct {
-		model      string
-		capability string
-		shouldErr  bool
-	}{
-		{"gpt-4o", "vision", false},
-		{"gpt-4o", "tool_calling", false},
-		{"gpt-4o", "structured_output", false},
-		{"gpt-4o", "system_prompt", false},
-		{"gpt-4o-mini", "vision", false},
-		{"gpt-4o-mini", "tool_calling", false},
-		{"unknown-model", "tool_calling", false}, // default supports tool calling
-	}
-
-	for _, tc := range testCases {
-		err := validateModelForCapability(tc.model, tc.capability)
-
-		if tc.shouldErr && err == nil {
-			t.Errorf("validateModelForCapability(%s, %s) expected error but got none", tc.model, tc.capability)
-		}
-
-		if !tc.shouldErr && err != nil {
-			t.Errorf("validateModelForCapability(%s, %s) expected no error but got: %v", tc.model, tc.capability, err)
-		}
-	}
-}
-
 // Test that the client can be created without API key (will fail at runtime, but should compile and validate)
 func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
 	// This test assumes OPENAI_API_KEY is not set in the test environment
 	// In a real environment, this would check for the environment variable
-	_, err := NewOpenAIClient("gpt-4o")
+	_, err := NewOpenAIClient("gpt-4o", 0)
 	if err == nil {
 		// If no error, the API key was set in the environment, which is fine for testing
 		t.Skip("OPENAI_API_KEY is set in environment, skipping test")

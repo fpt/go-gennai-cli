@@ -53,7 +53,7 @@ func NewToolCallMessageWithThinkingAndSignature(toolName ToolName, toolArgs Tool
 	if signature != "" {
 		metadata["anthropic_thinking_signature"] = signature
 	}
-	
+
 	return &ToolCallMessage{
 		ChatMessage: ChatMessage{
 			id:         generateMessageID(),
