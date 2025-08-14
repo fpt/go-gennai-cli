@@ -60,8 +60,8 @@ func fromOllamaMessage(msg api.Message) message.Message {
 	return message.NewChatMessage(msgType, msg.Content)
 }
 
-// ToOllamaMessages converts neutral messages to Ollama format
-func ToOllamaMessages(messages []message.Message) []api.Message {
+// toOllamaMessages converts neutral messages to Ollama format
+func toOllamaMessages(messages []message.Message) []api.Message {
 	var ollamaMessages []api.Message
 
 	for _, msg := range messages {

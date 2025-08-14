@@ -195,7 +195,7 @@ func (c *OllamaClient) SupportsVision() bool {
 // ChatWithToolChoice sends a message to Ollama with tool choice control
 func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
 	// Convert to Ollama format
-	ollamaMessages := ToOllamaMessages(messages)
+	ollamaMessages := toOllamaMessages(messages)
 
 	chatRequest := &api.ChatRequest{
 		Model:    c.model,
@@ -250,7 +250,7 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 // chatWithOptions is a private helper that consolidates chat logic
 func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.Message, enableThinking *bool) (message.Message, error) {
 	// Convert to Ollama format
-	ollamaMessages := ToOllamaMessages(messages)
+	ollamaMessages := toOllamaMessages(messages)
 
 	chatRequest := &api.ChatRequest{
 		Model:    c.model,
