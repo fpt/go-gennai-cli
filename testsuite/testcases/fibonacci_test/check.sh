@@ -6,24 +6,30 @@
 output_file="$1"
 error_file="$2"
 
+# Use the local copy of extract_response utility
+EXTRACT_RESPONSE="./extract_response.sh"
+
 echo "Testing AI-generated multi-step Fibonacci program..."
 
-# Check if the output contains mentions of both phases of the task
-if ! grep -i -q "fibonacci.*10" "$output_file" && ! grep -i -q "10.*fibonacci" "$output_file"; then
+# Extract only the response content using the utility script
+response_content=$("$EXTRACT_RESPONSE" "$output_file")
+
+# Check if the response contains mentions of both phases of the task
+if ! echo "$response_content" | grep -i -q "fibonacci.*10" && ! echo "$response_content" | grep -i -q "10.*fibonacci"; then
     echo "✗ Basic Fibonacci generation task not found in gennai response"
-    echo "Output was:"
-    cat "$output_file"
+    echo "Response content was:"
+    echo "$response_content"
     exit 1
 fi
 
-if ! grep -i -q "command.*line.*arg\|argument" "$output_file"; then
+if ! echo "$response_content" | grep -i -q "command.*line.*arg\|argument"; then
     echo "✗ Command line argument task not found in gennai response"
-    echo "Output was:"
-    cat "$output_file"
+    echo "Response content was:"
+    echo "$response_content"
     exit 1
 fi
 
-echo "✓ Both phases (Fibonacci generation, command line args) found in output"
+echo "✓ Both phases (Fibonacci generation, command line args) found in response"
 
 # =====================================
 # PHASE 1 VALIDATION: Basic Fibonacci
@@ -145,8 +151,8 @@ fi
 phase2_output15=$(cat step2_test15.txt)
 echo "Phase 2 output with arg '15': $phase2_output15"
 
-# Check if output has 15 numbers (count spaces + 1, or count commas + 1)
-num_count=$(echo "$phase2_output15" | tr ' ' '\n' | wc -l | xargs)
+# Check if output has 15 numbers (count words, handling trailing spaces)
+num_count=$(echo "$phase2_output15" | wc -w | xargs)
 if [ "$num_count" -eq 15 ]; then
     echo "✓ Phase 2: Program correctly generates 15 numbers"
 elif echo "$phase2_output15" | grep -o "," | wc -l | grep -q "14"; then

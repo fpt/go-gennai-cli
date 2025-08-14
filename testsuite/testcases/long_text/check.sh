@@ -36,10 +36,13 @@ else
     compaction_occurred=false
 fi
 
-# Extract turn outputs
-turn2_output=$(grep -A 10 "Turn 2" "$output_file" | head -10)
-turn4_output=$(grep -A 10 "Turn 4" "$output_file" | head -10)  
-turn5_output=$(grep -A 10 "Turn 5" "$output_file" | head -10)
+# Get the extract_response utility (copied to current directory by runner)
+EXTRACT_RESPONSE="./extract_response.sh"
+
+# Extract turn outputs - capture only the final response, excluding thinking output
+turn2_output=$("$EXTRACT_RESPONSE" "$output_file" 2)
+turn4_output=$("$EXTRACT_RESPONSE" "$output_file" 4)
+turn5_output=$("$EXTRACT_RESPONSE" "$output_file" 5)
 
 # Turn 2: Should remember Sir Galahad's sword (Excalibur) and its powers (blue glow, cuts through anything)
 if echo "$turn2_output" | grep -iq "excalibur"; then

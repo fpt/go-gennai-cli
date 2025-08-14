@@ -104,6 +104,12 @@ echo -e "${YELLOW}🗂️  Created temporary test directory: $temp_test_dir${NC}
 echo -e "${YELLOW}📋 Copying test files to temporary directory...${NC}"
 cp -r "$testcase_dir/"* "$temp_test_dir/"
 
+# Copy the extract_response.sh utility script to the temp directory
+if [ -f "$script_dir/extract_response.sh" ]; then
+    cp "$script_dir/extract_response.sh" "$temp_test_dir/"
+    chmod +x "$temp_test_dir/extract_response.sh"
+fi
+
 # Use the temporary directory as the working directory (complete isolation)
 test_work_dir="$temp_test_dir"
 echo "Test working directory: $test_work_dir"
@@ -129,7 +135,7 @@ if [ $exit_code -eq 0 ]; then
     # Run the check script from the test working directory (use copied check.sh)
     echo -e "${YELLOW}🔍 Running validation check in: $test_work_dir${NC}"
     
-    if (cd "$test_work_dir" && "$temp_test_dir/check.sh" "$output_file" "$error_file"); then
+    if (cd "$test_work_dir" && TESTSUITE_DIR="$script_dir" "$temp_test_dir/check.sh" "$output_file" "$error_file"); then
         echo ""
         echo -e "${GREEN}✅ PASS: $testcase_name × $backend_name${NC}"
         # Clean up temporary directory and files
