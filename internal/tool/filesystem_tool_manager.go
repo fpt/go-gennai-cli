@@ -224,10 +224,10 @@ func (m *FileSystemToolManager) abs(path string) (string, error) {
 	if filepath.IsAbs(path) {
 		return path, nil
 	}
-	
+
 	// For relative paths, resolve against the tool's working directory
 	resolved := filepath.Join(m.workingDir, path)
-	
+
 	// Clean the path to handle . and .. elements
 	return filepath.Clean(resolved), nil
 }
