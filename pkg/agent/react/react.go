@@ -85,24 +85,24 @@ func (r *ReAct) GetConversationSummary() string {
 }
 
 // chatWithThinkingIfSupported uses thinking if the LLM client supports it
-func (r *ReAct) chatWithThinkingIfSupported(ctx context.Context, messages []message.Message) (message.Message, error) {
-	return r.llmClient.Chat(ctx, messages, true)
+func (r *ReAct) chatWithThinkingIfSupported(ctx context.Context, messages []message.Message, thinkingChan chan<- string) (message.Message, error) {
+	return r.llmClient.Chat(ctx, messages, true, thinkingChan)
 }
 
 // chatWithToolChoice uses tool choice control if the LLM client supports it
-func (r *ReAct) chatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (r *ReAct) chatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, thinkingChan chan<- string) (message.Message, error) {
 	// Check if the client supports tool calling with tool choice
 	if toolClient, ok := r.llmClient.(domain.ToolCallingLLM); ok {
-		return toolClient.ChatWithToolChoice(ctx, messages, toolChoice)
+		return toolClient.ChatWithToolChoice(ctx, messages, toolChoice, true, thinkingChan)
 	}
 
 	// If the client doesn't support tool choice, fall back to regular chat
 	// This ensures compatibility with non-tool-calling clients
-	return r.chatWithThinkingIfSupported(ctx, messages)
+	return r.llmClient.Chat(ctx, messages, true, thinkingChan)
 }
 
-// InvokeWithOptions processes input using the configured maxIterations (options.LoopLimit is ignored)
-func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, error) {
+// Invoke processes input using the configured maxIterations with external thinking channel
+func (r *ReAct) Invoke(ctx context.Context, input string, thinkingChan chan<- string) (message.Message, error) {
 	// Use the configured maxIterations instead of options.LoopLimit
 	loopLimit := r.maxIterations
 
@@ -142,10 +142,10 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 		// Check if we have tools available and should use tool calling
 		if r.toolManager != nil && len(r.toolManager.GetTools()) > 0 {
 			// Use tool choice auto to let the LLM decide when to use tools
-			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto})
+			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto}, thinkingChan)
 		} else {
 			// Fall back to thinking if supported, otherwise regular chat
-			resp, err = r.chatWithThinkingIfSupported(ctx, messages)
+			resp, err = r.chatWithThinkingIfSupported(ctx, messages, thinkingChan)
 		}
 
 		if err != nil {

@@ -80,7 +80,8 @@ go run gennai/main.go "Create a new microservice with Docker support, tests, and
 ```bash
 go test ./...                      # Run all tests
 go test -v ./...                   # Run tests with verbose output
-go test ./internal/agent           # Test specific package
+go test ./internal/app             # Test specific package (app layer)
+go test ./pkg/agent/react          # Test ReAct implementation
 ```
 
 **Code Quality:**
@@ -138,69 +139,77 @@ Projects are stored in directories using the pattern: `{project-basename}-{path-
 
 ## Architecture
 
-This is a Go-based scenario-driven coding agent that uses YAML-configured scenarios with the ReAct (Reason and Act) pattern. It supports multiple LLM backends, secure tool management, and interactive mode. The codebase follows a clean architecture with dependency injection and scenario-based execution:
+This is a Go-based scenario-driven coding agent that uses YAML-configured scenarios with the ReAct (Reason and Act) pattern. It supports multiple LLM backends, secure tool management, and interactive mode. The codebase follows a clean DDD architecture with direct scenario execution:
 
 **Core Structure:**
 - `gennai/main.go` - Application entry point with interactive REPL
-- `internal/agent/` - Scenario-based agent implementation:
-  - `scenario_runner.go` - Main ScenarioRunner orchestrating planner → ReAct workflow
-  - `planner_agent.go` - PlannerAgent for scenario selection using StructuredLLM
-- `internal/config/` - YAML-based scenario configuration:
+- `internal/app/` - Application layer (DDD) with scenario execution:
+  - `scenario.go` - Main ScenarioRunner handling direct scenario execution with thinking channel management
+- `internal/config/` - Configuration management:
+  - Settings, user configuration, and application preferences
+- `internal/infra/` - Infrastructure layer:
   - `scenario.go` - Scenario configuration loading and template rendering
   - `filesystem.go` - File system security configuration
 - `internal/tool/` - Tool management with security features:
-  - `simple_tool_manager.go` - Basic tool manager with MCP support
-  - `filesystem_tool_manager.go` - Secure filesystem tools with read→write semantics
   - `composite_tool_manager.go` - Combines multiple tool managers
+  - `filesystem_tool_manager.go` - Secure filesystem tools with read→write semantics
+  - `todo_tool_manager.go` - Todo management tools
+  - `web_tool_manager.go` - Web research and fetching tools
+  - `solver_tool_manager.go` - CSP constraint solving tools
 - `internal/scenarios/` - Embedded YAML scenario definitions:
-  - `filesystem.yaml`, `generate.yaml`, `analyze-code.yaml` - Individual scenario configs
-  - `research.yaml`, `respond.yaml`, etc. - Additional scenario definitions
+  - `code.yaml`, `respond.yaml`, `solver.yaml` - Built-in scenario configs
   - `embedded.go` - Go embed integration for built-in scenarios
-- `pkg/llmclient/` - Clean LLM client abstraction layer:
+- `internal/mcp/` - MCP (Model Context Protocol) integration:
+  - External tool server integration and management
+- `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
-  - `message/` - Message handling and state management with vision support
-  - `react/` - ReAct pattern implementation with vision message truncation
-  - `model/` - Tool definitions
-- `pkg/client/` - Client factory, structured output creation, and tool wrapper:
-  - `structured_factory.go` - Factory for creating structured clients
+  - `react/` - ReAct pattern implementation with thinking channel support
+  - `state/` - Message state management and session persistence
+- `pkg/message/` - Message handling and thinking stream management
+- `pkg/client/` - LLM client implementations and abstractions:
   - `withtool.go` - ClientWithTool wrapper for tool management
-  - LLM client implementations (Ollama, Anthropic)
+  - LLM client implementations (Ollama, Anthropic, OpenAI, Gemini)
 
 **Key Types:**
-- `ScenarioRunner` - Main orchestrator managing planner → ReAct workflow with scenario-specific tools
-- `PlannerAgent` - Scenario selection using StructuredLLM with YAML-based action descriptions
-- `ScenarioConfig` - YAML-based scenario definition with tools, description, and prompt template
-- `FileSystemToolManager` - Secure filesystem tools with read→write semantics and allowlist/blacklist
-- `CompositeToolManager` - Combines multiple tool managers (e.g., filesystem + default tools)
-- `react.ReAct` - Core ReAct implementation with vision message truncation
+- `app.ScenarioRunner` - Main application service handling direct scenario execution with thinking channel management
+- `infra.ScenarioConfig` - YAML-based scenario definition with tools, description, and prompt template
+- `tool.CompositeToolManager` - Combines multiple specialized tool managers
+- `tool.FileSystemToolManager` - Secure filesystem tools with read→write semantics and allowlist/blacklist
+- `tool.TodoToolManager` - Todo management with persistent and in-memory variants
+- `tool.WebToolManager` - Web research and content fetching tools
+- `tool.SolverToolManager` - CSP constraint solving capabilities
+- `react.ReAct` - Core ReAct implementation with thinking channel support
 - `client.ClientWithTool` - Auto-detecting wrapper for native vs text-based tool calling
 - `domain.LLM` - Base interface for LLM clients
 - `domain.StructuredLLM[T any]` - Generic interface for type-safe structured output
 - `domain.ToolManager` - Interface for tool management with security controls
+- `state.MessageState` - Session persistence and message management
 
-**YAML-Driven Scenario System:**
-The system uses embedded built-in scenarios with optional custom overrides. See [YAML Scenario System](#yaml-scenario-system) section for complete details.
+**Direct Scenario Execution:**
+The system uses CLI-specified scenarios with embedded YAML configurations. No AI-powered scenario selection - scenarios are directly specified via command line arguments.
 
-**Security-First Tool Management:**
-- **Scenario-Based Tool Isolation**: Different scenarios get different tool access
-- **Read→Write Semantics**: Files must be read before writing, with timestamp validation
-- **Directory Allowlist**: Filesystem access restricted to approved directories
-- **File Blacklist**: Prevents reading sensitive files (.env, .secret, etc.)
-- **Composite Tool Strategy**: Filesystem scenarios get both secure filesystem + default tools
+**Universal + Specialized Tool Architecture:**
+- **Universal Tools**: Always available (todos, filesystem, bash, grep) via composite manager
+- **Specialized Tools**: Added based on scenario requirements (web, solver, MCP tools)
+- **Security-First Design**: Read→write semantics, directory allowlists, file blacklists
+- **Tool Composition**: Dynamic tool manager creation based on scenario tool specifications
 
-**Workflow Architecture:**
-1. **YAML Loading** → Load built-in embedded scenarios + optional custom scenarios
-2. **Planner Selection** → StructuredLLM selects scenario using YAML descriptions
-3. **Tool Manager Selection** → Choose tools based on scenario's tool specification
+**Simplified Workflow Architecture:**
+1. **CLI Scenario Selection** → User specifies scenario directly via command line
+2. **YAML Loading** → Load built-in embedded scenarios + optional custom scenarios
+3. **Tool Manager Composition** → Create composite tool manager based on scenario's tool specification
 4. **Prompt Rendering** → Render YAML template with user input variables
-5. **ReAct Execution** → Execute scenario with appropriate tools and rendered prompt
+5. **ReAct Execution** → Execute scenario with composed tools and rendered prompt
+6. **Thinking Channel** → Stream thinking content via dedicated channel management
 
-**Key Improvements:**
+**Key Architecture Features:**
+- **DDD Layering**: Clean separation with app layer (ScenarioRunner) managing workflow
 - **Embedded + Custom YAML Configuration**: Built-in scenarios embedded in binary + optional custom overrides
-- **Security Isolation**: Scenario-specific tool access prevents unauthorized filesystem operations
+- **Universal Tool Foundation**: Core tools always available, specialized tools added per scenario
+- **Thinking Channel Management**: Application layer handles thinking stream creation and management
+- **Session Persistence**: Project-specific session storage with interactive/one-shot mode separation
+- **Security Isolation**: Scenario-specific tool access prevents unauthorized operations
 - **Template-Based Prompts**: Dynamic prompt generation with variable substitution
-- **Composite Tool Architecture**: Flexible tool combination based on scenario requirements
-- **Type-Safe Scenario Selection**: Structured LLM output ensures consistent scenario selection
 
 **Tool Support:**
 The system supports unified tool calling with automatic detection of model capabilities and sophisticated tool schema handling:
@@ -274,47 +283,64 @@ NOTE: Thinking is not a capability. It's a behavior of model.
 
 **Available Tools:**
 
-**Default Tools (all scenarios):**
-- MCP tools (tree_dir, get_github_content, search_local_files, etc.)
-- `go_build` - Build Go packages
-- `go_run` - Run Go programs
-- Web tools (fetch_web, wikipedia_search, duckduckgo_search)
-  - `fetch_web` - HTML to markdown conversion for text analysis
+**Universal Tools (always available):**
+- **Todo Management**: Create, update, delete, and manage project todos
+- **Secure Filesystem**: Read, write, edit files with read→write semantics and security controls
+  - `read_file` - Read file contents (with timestamp tracking)
+  - `write_file` - Write content to files (requires prior read, validates timestamps)
+  - `list_directory` - List directory contents (allowlist restricted)
+  - `edit_file` - Edit files with exact string replacement
+- **Bash Execution**: Run shell commands with working directory and timeout controls
 
-**Secure Filesystem Tools (filesystem scenarios only):**
-- `read_file` - Read file contents (with timestamp tracking)
-- `write_file` - Write content to files (requires prior read, validates timestamps)
-- `list_directory` - List directory contents (allowlist restricted)
-- `run_grep` - Search patterns in files (allowlist restricted)
-- `edit_file` - Edit files with exact string replacement (read→write semantics)
+**Specialized Tools (scenario-specific):**
+- **Web Tools**: Web research and content fetching (CODE, RESPOND scenarios)
+  - `fetch_web` - HTML to markdown conversion for text analysis
+  - `wikipedia_search` - Wikipedia content search
+  - `duckduckgo_search` - Web search capabilities
+- **Solver Tools**: CSP constraint satisfaction problem solving (SOLVER scenario)
+  - Constraint definition and solving capabilities
+- **MCP Tools**: External tool server integration (when available)
+  - `tree_dir`, `get_github_content`, `search_local_files`, etc.
 
 **Tool Binding and Security:**
 Tools are bound to the LLM client with scenario-specific security controls:
 ```go
-// Get scenario-specific tool manager
-toolManager := scenarioRunner.getToolManagerForScenario(selectedAction)
+// Get scenario-specific tool manager (universal + specialized)
+toolManager := scenarioRunner.getToolManagerForScenario(scenarioName)
 
 // Bind tools to LLM client
 llmWithTools, err := client.NewClientWithToolManager(llmClient, toolManager)
-reactClient := react.NewReAct(llmWithTools, toolManager, sharedState)
+reactClient := react.NewReAct(llmWithTools, toolManager, sharedState, aligner, maxIterations)
 ```
 
 **Tool Manager Selection Logic:**
 ```go
 func (s *ScenarioRunner) getToolManagerForScenario(scenario string) domain.ToolManager {
+    // Universal manager is always included (todos, filesystem, bash)
+    managers := []domain.ToolManager{s.universalManager}
+    
     if scenarioConfig, exists := s.scenarios[scenario]; exists {
         toolScope := scenarioConfig.GetToolScope()
         
-        if toolScope.UseFilesystem && toolScope.UseDefault {
-            // Combine secure filesystem + default tools
-            return tool.NewCompositeToolManager(s.defaultToolManager, s.filesystemManager)
-        } else if toolScope.UseFilesystem {
-            // Only secure filesystem tools
-            return s.filesystemManager
+        // Add web tools if requested (for CODE, RESPOND scenarios)
+        if toolScope.UseDefault {
+            managers = append(managers, s.webToolManager)
+        }
+        
+        // Add solver tools if requested (for SOLVER scenarios)
+        if toolScope.UseSolver {
+            managers = append(managers, s.solverToolManager)
+        }
+        
+        // Add MCP tools if requested
+        for _, mcpName := range toolScope.MCPTools {
+            if mcpManager, exists := s.mcpToolManagers[mcpName]; exists {
+                managers = append(managers, mcpManager)
+            }
         }
     }
-    // Default tools only (safe for web/research scenarios)
-    return s.defaultToolManager
+    
+    return tool.NewCompositeToolManager(managers...)
 }
 ```
 
@@ -351,18 +377,20 @@ mySchema := structuredClient.GetSchema() // Returns MyResponse, not any
 Both Ollama and Anthropic support thinking capabilities:
 - **Ollama**: Reasoning models (gpt-oss) support the thinking parameter
 - **Anthropic**: Claude models support ThinkingBlock responses for reasoning visibility
-- Automatically enabled for thinking-capable models via type assertion
-- Provides visible reasoning process for debugging and transparency
-- Thinking content captured in message with `Thinking()` method
+- **Channel Management**: Application layer creates and manages thinking channels
+- **Stream Processing**: Real-time thinking content streaming with visual formatting
+- **Automatic Detection**: Thinking enabled for capable models via type assertion
+- **Debug Visibility**: Provides visible reasoning process for debugging and transparency
 
 **Dependency Injection:**
-The architecture uses clean dependency injection with scenario-based configuration:
+The architecture uses clean dependency injection with DDD layering:
 - YAML scenario configurations loaded at startup
-- Scenario-specific tool managers created based on security requirements
-- LLM clients wrapped with appropriate tool managers per scenario
-- PlannerAgent and ScenarioRunner injected with shared state
-- Enhanced LLM clients injected into ReAct for execution
-- No tight coupling between components
+- Universal tool manager always created with core capabilities
+- Specialized tool managers created and composed based on scenario requirements
+- LLM clients wrapped with composed tool managers per scenario
+- ScenarioRunner (app layer) manages thinking channels and session persistence
+- ReAct (domain layer) handles execution with injected tool managers
+- No tight coupling between layers
 
 **Interactive Mode:**
 The application supports two modes:
@@ -423,8 +451,9 @@ The system uses a hybrid approach combining embedded built-in scenarios with opt
 
 **Built-in Embedded Scenarios:**
 The system includes built-in scenarios embedded in the binary:
-- `CODE` - Comprehensive coding assistant for all development tasks (filesystem, default, todo, bash, mcp:godevmcp)
-- `RESPOND` - Direct knowledge-based responses, todo management, and tool usage (default tools only)
+- `CODE` - Comprehensive coding assistant for all development tasks (universal tools + web + MCP)
+- `RESPOND` - Direct knowledge-based responses and todo management (universal tools + web)
+- `SOLVER` - Constraint satisfaction problem solving (universal tools + solver)
 
 **Custom Scenario Files:**
 You can override or extend built-in scenarios using the `--scenarios` flag:
@@ -447,17 +476,17 @@ gennai --scenarios ./base-scenarios.yaml --scenarios ./override-scenarios.yaml "
 
 **Template Variables:**
 - `{{userInput}}` - The user's original request
-- `{{scenarioReason}}` - Planner's reasoning for selecting this scenario  
+- `{{scenarioReason}}` - Reasoning for scenario selection (typically "CLI specified")
 - `{{workingDir}}` - Current working directory path
 
 **Tool Scope Options:**
-- `"default"` - Only default tools (built-in tools like go_build, go_run)
-- `"filesystem"` - Only secure filesystem tools (unusual)
-- `"filesystem, default"` - Both secure filesystem and default tools
-- `"mcp:godevmcp"` - Specific MCP tool manager (e.g., godevmcp for Go development)
-- `"mcp:serverB"` - Another MCP tool manager (e.g., serverB for general development)
-- `"default, mcp:godevmcp, mcp:serverB"` - Combine default tools with multiple MCP tools
-- `"filesystem, default, mcp:godevmcp"` - All tool types combined
+- `"todo, filesystem, bash"` - Universal tools only (always included)
+- `"default"` - Universal tools + web tools
+- `"solver"` - Universal tools + constraint solver tools
+- `"mcp:godevmcp"` - Universal tools + specific MCP tool manager
+- `"mcp:*"` - Universal tools + all available MCP tool managers
+- `"default, solver, mcp:godevmcp"` - Universal + web + solver + specific MCP tools
+- `"default, mcp:*"` - Universal + web + all MCP tools
 
 **MCP Tool Management:**
 - **Graceful Degradation**: If an MCP tool manager is not available, the system prints a warning but continues running with other available tools
@@ -577,10 +606,10 @@ The project has comprehensive unit tests with 99% coverage:
 go test ./...
 
 # Run with coverage
-go test -cover ./pkg/llmclient/react/
+go test -cover ./pkg/agent/react/
 
 # Run specific test suites
-go test -v ./pkg/llmclient/react/ -run TestReAct_Invoke
+go test -v ./pkg/agent/react/ -run TestReAct_Invoke
 go test -v ./pkg/client/ollama/ -run TestToolSchemaIntegration
 
 # Test tool schema handling specifically
@@ -589,6 +618,8 @@ go test ./pkg/client/ollama/ -v
 
 ### Integration Testing Scenarios
 Run these scenarios to evaluate gennai's scenario-based system:
+NOTE: Use `source .env` to configure API keys.
+NOTE: Use `make build` to build binary and always use `./output/gennai` to run.
 
 **Scenario Testing (One-shot Mode):**
 1. **CODE Scenario**: `go run gennai/main.go "Create a new Go HTTP server with health check endpoint"`
@@ -672,9 +703,11 @@ Comprehensive test suites for tool schema handling:
 
 **Integration Testing:**
 Tests use mocked dependencies to ensure:
-- Clean separation between planner and executor
+- Clean DDD layer separation (app → domain → infrastructure)
+- Universal + specialized tool composition
 - Scenario-specific tool isolation
 - YAML-driven prompt generation
 - Secure filesystem access patterns
 - Tool schema consistency across different model capabilities
 - Proper routing between native tool calling and schema-as-tool patterns
+- Thinking channel management and streaming

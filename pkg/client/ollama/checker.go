@@ -74,7 +74,7 @@ func (c *CapabilityChecker) TestOllamaToolCalling(ctx context.Context, model str
 		fmt.Printf("🧪 Testing tool calling capability for model: %s\n", model)
 	}
 
-	response, err := testClient.ChatWithToolChoice(ctx, messages, toolChoice)
+	response, err := testClient.ChatWithToolChoice(ctx, messages, toolChoice, false, nil)
 	result.Duration = time.Since(start)
 
 	if err != nil {

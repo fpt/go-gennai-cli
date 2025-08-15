@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/chzyer/readline"
-	"github.com/fpt/go-gennai-cli/internal/agent"
+	"github.com/fpt/go-gennai-cli/internal/app"
 	"github.com/fpt/go-gennai-cli/internal/config"
 	"github.com/fpt/go-gennai-cli/internal/mcp"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -232,7 +232,7 @@ func main() {
 	}
 
 	// Initialize the scenario runner with optional MCP tool manager and additional scenarios
-	var a *agent.ScenarioRunner
+	var a *app.ScenarioRunner
 	// Skip session restoration for file mode (-f flag) to ensure clean isolated tests
 	skipSessionRestore := (*promptFile != "")
 	// Determine if we're in interactive mode (affects project directory usage)
@@ -248,7 +248,7 @@ func main() {
 			mcpToolManagers[serverName] = toolManager
 		}
 
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
 		stats := mcpIntegration.GetStats()
 		fmt.Printf("✅ MCP Integration: %d servers connected, %d tools available\n", stats.ConnectedServers, stats.TotalTools)
 
@@ -257,7 +257,7 @@ func main() {
 		fmt.Printf("🔧 Debug: Tool Manager has %d tools loaded\n", len(allTools))
 	} else {
 		mcpToolManagers := make(map[string]domain.ToolManager)
-		a = agent.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, skipSessionRestore, isInteractiveMode, scenarioPaths...)
 
 		// Note: SimpleToolManager removed - tools now managed by specialized managers
 	}
@@ -307,7 +307,7 @@ func main() {
 	}
 }
 
-func executeCommand(ctx context.Context, a *agent.ScenarioRunner, userInput string, scenario string) {
+func executeCommand(ctx context.Context, a *app.ScenarioRunner, userInput string, scenario string) {
 	fmt.Print("\n")
 
 	var response message.Message
@@ -324,7 +324,7 @@ func executeCommand(ctx context.Context, a *agent.ScenarioRunner, userInput stri
 	fmt.Printf("✅ Response:\n%+v\n", response.Content())
 }
 
-func executeMultiTurnFile(ctx context.Context, a *agent.ScenarioRunner, filePath string, scenario string) {
+func executeMultiTurnFile(ctx context.Context, a *app.ScenarioRunner, filePath string, scenario string) {
 	// Read the file content
 	content, err := os.ReadFile(filePath)
 	if err != nil {
@@ -370,7 +370,7 @@ func executeMultiTurnFile(ctx context.Context, a *agent.ScenarioRunner, filePath
 	fmt.Println("🏁 All turns completed.")
 }
 
-func startInteractiveMode(ctx context.Context, a *agent.ScenarioRunner, scenario string) {
+func startInteractiveMode(ctx context.Context, a *app.ScenarioRunner, scenario string) {
 	// Configure readline with enhanced features
 	config := &readline.Config{
 		Prompt:              "> ",
@@ -453,7 +453,7 @@ func startInteractiveMode(ctx context.Context, a *agent.ScenarioRunner, scenario
 type SlashCommand struct {
 	Name        string
 	Description string
-	Handler     func(*agent.ScenarioRunner) bool // Returns true if should exit
+	Handler     func(*app.ScenarioRunner) bool // Returns true if should exit
 }
 
 // getSlashCommands returns all available slash commands
@@ -462,7 +462,7 @@ func getSlashCommands() []SlashCommand {
 		{
 			Name:        "help",
 			Description: "Show available commands and usage information",
-			Handler: func(a *agent.ScenarioRunner) bool {
+			Handler: func(a *app.ScenarioRunner) bool {
 				showInteractiveHelp()
 				return false
 			},
@@ -470,7 +470,7 @@ func getSlashCommands() []SlashCommand {
 		{
 			Name:        "clear",
 			Description: "Clear conversation history and start fresh",
-			Handler: func(a *agent.ScenarioRunner) bool {
+			Handler: func(a *app.ScenarioRunner) bool {
 				a.ClearHistory()
 				fmt.Println("🧹 Conversation history cleared.")
 				return false
@@ -479,7 +479,7 @@ func getSlashCommands() []SlashCommand {
 		{
 			Name:        "status",
 			Description: "Show current session status and statistics",
-			Handler: func(a *agent.ScenarioRunner) bool {
+			Handler: func(a *app.ScenarioRunner) bool {
 				showStatus(a)
 				return false
 			},
@@ -487,7 +487,7 @@ func getSlashCommands() []SlashCommand {
 		{
 			Name:        "quit",
 			Description: "Exit the interactive session",
-			Handler: func(a *agent.ScenarioRunner) bool {
+			Handler: func(a *app.ScenarioRunner) bool {
 				fmt.Println("👋 Goodbye!")
 				return true
 			},
@@ -495,7 +495,7 @@ func getSlashCommands() []SlashCommand {
 		{
 			Name:        "exit",
 			Description: "Exit the interactive session (alias for quit)",
-			Handler: func(a *agent.ScenarioRunner) bool {
+			Handler: func(a *app.ScenarioRunner) bool {
 				fmt.Println("👋 Goodbye!")
 				return true
 			},
@@ -505,7 +505,7 @@ func getSlashCommands() []SlashCommand {
 
 // handleSlashCommand processes commands that start with /
 // Returns true if the command requests program exit, false otherwise
-func handleSlashCommand(input string, a *agent.ScenarioRunner) bool {
+func handleSlashCommand(input string, a *app.ScenarioRunner) bool {
 	// Check if this is just "/" - show command selector
 	if strings.TrimSpace(input) == "/" {
 		return showCommandSelector(a)
@@ -537,7 +537,7 @@ func handleSlashCommand(input string, a *agent.ScenarioRunner) bool {
 }
 
 // showCommandSelector shows an interactive command selector using promptui
-func showCommandSelector(a *agent.ScenarioRunner) bool {
+func showCommandSelector(a *app.ScenarioRunner) bool {
 	commands := getSlashCommands()
 
 	templates := &promptui.SelectTemplates{
@@ -582,7 +582,7 @@ func showCommandSelector(a *agent.ScenarioRunner) bool {
 }
 
 // showStatus displays current session status
-func showStatus(a *agent.ScenarioRunner) {
+func showStatus(a *app.ScenarioRunner) {
 	fmt.Println("\n📊 Session Status:")
 
 	// Get conversation preview to count messages

@@ -282,7 +282,7 @@ Summary:`, conversationBuilder.String())
 
 	// Use LLM to create summary
 	summaryMessage := message.NewChatMessage(message.MessageTypeUser, summaryPrompt)
-	response, err := llm.Chat(ctx, []message.Message{summaryMessage}, false) // Summary doesn't need thinking
+	response, err := llm.Chat(ctx, []message.Message{summaryMessage}, false, nil) // Summary doesn't need thinking
 	if err != nil {
 		return "", fmt.Errorf("failed to generate LLM summary: %w", err)
 	}

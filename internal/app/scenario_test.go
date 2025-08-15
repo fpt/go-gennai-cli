@@ -1,4 +1,4 @@
-package agent
+package app
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func TestActionSelectionResponse_JSONSerialization(t *testing.T) {
 // mockLLM is a simple mock for testing
 type mockLLM struct{}
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
 

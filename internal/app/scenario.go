@@ -1,4 +1,4 @@
-package agent
+package app
 
 import (
 	"context"
@@ -169,12 +169,15 @@ func (s *ScenarioRunner) Invoke(ctx context.Context, userInput string, scenarioN
 
 	fmt.Printf("📋 Using scenario: %s\n", scenarioName)
 
+	// Create thinking channel for streaming thinking messages
+	thinkingChan := message.CreateThinkingChannel()
+
 	// Execute scenario directly with CLI reasoning
-	return s.executeScenario(ctx, userInput, scenarioName, "Scenario specified directly via CLI")
+	return s.executeScenario(ctx, userInput, scenarioName, "Scenario specified directly via CLI", thinkingChan)
 }
 
 // executeScenario handles the common execution logic for both Invoke and InvokeWithScenario
-func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, scenarioName string, reasoning string) (message.Message, error) {
+func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, scenarioName string, reasoning string, thinkingChan chan<- string) (message.Message, error) {
 	// Step 1: Create scenario-specific tool manager and ReAct client
 	toolManager := s.getToolManagerForScenario(scenarioName)
 
@@ -201,7 +204,7 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 
 	actionPrompt := s.createActionPrompt(userInput, actionResp)
 
-	result, err := reactClient.Invoke(ctx, actionPrompt)
+	result, err := reactClient.Invoke(ctx, actionPrompt, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
@@ -286,6 +289,9 @@ func (s *ScenarioRunner) getToolManagerForScenario(scenario string) domain.ToolM
 // InvokeWithOptions creates a ReAct client with universal tools and configured maxIterations
 // This method creates a temporary ReAct client with universal tools
 func (s *ScenarioRunner) InvokeWithOptions(ctx context.Context, prompt string) (message.Message, error) {
+	// Create thinking channel for streaming thinking messages
+	thinkingChan := message.CreateThinkingChannel()
+
 	// Create temporary ReAct client with universal tools
 	llmWithTools, err := client.NewClientWithToolManager(s.llmClient, s.universalManager)
 	if err != nil {
@@ -300,7 +306,7 @@ func (s *ScenarioRunner) InvokeWithOptions(ctx context.Context, prompt string) (
 	}
 	reactClient := react.NewReAct(llmWithTools, s.universalManager, s.sharedState, aligner, maxIterations)
 
-	return reactClient.Invoke(ctx, prompt)
+	return reactClient.Invoke(ctx, prompt, thinkingChan)
 }
 
 // GetConversationPreview returns a formatted preview of the last few messages

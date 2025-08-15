@@ -36,7 +36,7 @@ func TestGetModelCapabilities(t *testing.T) {
 		{"gpt-4o-mini", true, true, true, true},
 		{"gpt-5", true, true, true, true},
 		{"gpt-5-mini", true, true, true, true},
-		{"unknown-model", false, true, true, true}, // default capabilities
+		{"unknown-model", true, true, true, true}, // default capabilities (gpt-5-mini)
 	}
 
 	for _, tc := range testCases {
