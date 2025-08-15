@@ -276,7 +276,7 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 		case message.MessageTypeAssistant:
 			// Handle assistant messages with thinking content
 			var contentBlocks []anthropic.ContentBlockParamUnion
-			
+
 			// Add thinking block first if present (required by Anthropic when thinking is enabled)
 			if thinking := msg.Thinking(); thinking != "" {
 				thinkingBlock := anthropic.ContentBlockParamUnion{
@@ -286,46 +286,46 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 				}
 				contentBlocks = append(contentBlocks, thinkingBlock)
 			}
-			
+
 			// Add text content if present
 			if msg.Content() != "" {
 				textBlock := anthropic.NewTextBlock(msg.Content())
 				contentBlocks = append(contentBlocks, textBlock)
 			}
-			
+
 			// If no content blocks, create a simple text block to avoid empty message
 			if len(contentBlocks) == 0 {
 				textBlock := anthropic.NewTextBlock(msg.Content())
 				contentBlocks = append(contentBlocks, textBlock)
 			}
-			
+
 			anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(contentBlocks...))
 		case message.MessageTypeSystem:
 			// System messages in Anthropic are handled differently - convert to user message
 			anthropicMessages = append(anthropicMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(fmt.Sprintf("System: %s", msg.Content()))))
 		case message.MessageTypeToolCall:
 			if toolCallMsg, ok := msg.(*llmmsg.ToolCallMessage); ok {
-				// When thinking is enabled globally and we have thinking content, 
+				// When thinking is enabled globally and we have thinking content,
 				// ALL assistant messages must start with thinking blocks
 				var contentBlocks []anthropic.ContentBlockParamUnion
-				
+
 				// Add thinking block only if we have actual thinking content
 				if thinkingContent := msg.Thinking(); thinkingContent != "" {
 					thinkingBlockParam := &anthropic.ThinkingBlockParam{
 						Thinking: thinkingContent,
 					}
-					
+
 					// Check if we have a preserved signature from streaming
 					if signature, hasSignature := msg.Metadata()["anthropic_thinking_signature"].(string); hasSignature && signature != "" {
 						thinkingBlockParam.Signature = signature
 					}
-					
+
 					thinkingBlock := anthropic.ContentBlockParamUnion{
 						OfThinking: thinkingBlockParam,
 					}
 					contentBlocks = append(contentBlocks, thinkingBlock)
 				}
-				
+
 				// Add tool use block
 				toolUse := anthropic.NewToolUseBlock(
 					msg.ID(),
@@ -333,7 +333,7 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 					string(toolCallMsg.ToolName()),
 				)
 				contentBlocks = append(contentBlocks, toolUse)
-				
+
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(contentBlocks...))
 			}
 		case message.MessageTypeToolResult:

@@ -166,7 +166,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "openai":
-		llmClient, err = openai.NewOpenAIClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
+		llmClient, err = openai.NewOpenAIClient(settings.LLM.Model, settings.LLM.MaxTokens)
 		if err != nil {
 			logger.ErrorWithIcon("❌", "Failed to create OpenAI client", "error", err)
 			os.Exit(1)
