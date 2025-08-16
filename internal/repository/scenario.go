@@ -6,6 +6,7 @@ type ToolScope struct {
 	UseDefault    bool
 	UseTodo       bool
 	UseBash       bool
+	UseSolver     bool
 	MCPTools      []string // List of MCP tool manager names (e.g., ["serverA", "serverB"])
 }
 

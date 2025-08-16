@@ -118,11 +118,23 @@ echo "Test working directory: $test_work_dir"
 
 # Run the test in the temporary directory using the copied files
 prompt_file="$temp_test_dir/prompt.txt"
-echo -e "${CYAN}Running: $CLI --workdir $test_work_dir --settings $backend_file -f $prompt_file${NC}"
-if "$CLI" --workdir "$test_work_dir" --settings "$backend_file" -f "$prompt_file" > "$output_file" 2> "$error_file"; then
-    exit_code=0
+run_script="$temp_test_dir/run.sh"
+
+# Check if custom run.sh exists and use it, otherwise use default command
+if [ -f "$run_script" ] && [ -x "$run_script" ]; then
+    echo -e "${CYAN}Running: $run_script $CLI $test_work_dir $backend_file $prompt_file${NC}"
+    if "$run_script" "$CLI" "$test_work_dir" "$backend_file" "$prompt_file" > "$output_file" 2> "$error_file"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 else
-    exit_code=$?
+    echo -e "${CYAN}Running: $CLI --workdir $test_work_dir --settings $backend_file -f $prompt_file${NC}"
+    if "$CLI" --workdir "$test_work_dir" --settings "$backend_file" -f "$prompt_file" > "$output_file" 2> "$error_file"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 fi
 
 echo ""

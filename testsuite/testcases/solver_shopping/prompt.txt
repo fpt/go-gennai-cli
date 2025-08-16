@@ -1,0 +1,13 @@
+I'm planning to cook and need help deciding what raw ingredients to buy. I have a budget of $25 and want to buy exactly 3 items from these options:
+
+- Ground beef ($12 per package)
+- Rice ($4 per bag) 
+- Tomatoes ($6 per basket)
+- Onions ($3 per bag)
+
+My constraints are:
+- I must buy at least one protein (ground beef)
+- The total cost must be exactly $19 (I want to save $6 from my $25 budget)
+- I need exactly 3 different items
+
+Can you help me figure out what combination of items I should buy?

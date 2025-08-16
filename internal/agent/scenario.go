@@ -52,17 +52,18 @@ type ActionSelectionResponse struct {
 
 // ScenarioRunner handles scenario-based planning and sequential action execution
 type ScenarioRunner struct {
-	llmClient        domain.LLM                    // Base LLM client
-	universalManager *tool.CompositeToolManager    // Universal tools (always available: todos, filesystem, bash, grep)
-	todoToolManager  *tool.TodoToolManager         // Direct access to TodoToolManager for aligner
-	webToolManager   *tool.WebToolManager          // Optional web tools for web scenarios
-	mcpToolManagers  map[string]domain.ToolManager // MCP tool managers by name
-	workingDir       string
-	sharedState      domain.State      // Shared state for all agents
-	scenarios        infra.ScenarioMap // Loaded YAML scenarios
-	sessionFilePath  string            // Path to session state file for persistence
-	settings         *config.Settings  // Application settings for configuration
-	logger           *pkgLogger.Logger // Structured logger for this component
+	llmClient         domain.LLM                    // Base LLM client
+	universalManager  *tool.CompositeToolManager    // Universal tools (always available: todos, filesystem, bash, grep)
+	todoToolManager   *tool.TodoToolManager         // Direct access to TodoToolManager for aligner
+	webToolManager    *tool.WebToolManager          // Optional web tools for web scenarios
+	solverToolManager *tool.SolverToolManager       // CSP solver tools for solver scenarios
+	mcpToolManagers   map[string]domain.ToolManager // MCP tool managers by name
+	workingDir        string
+	sharedState       domain.State      // Shared state for all agents
+	scenarios         infra.ScenarioMap // Loaded YAML scenarios
+	sessionFilePath   string            // Path to session state file for persistence
+	settings          *config.Settings  // Application settings for configuration
+	logger            *pkgLogger.Logger // Structured logger for this component
 }
 
 // NewScenarioRunner creates a new ScenarioRunner with MCP tools, settings, and additional scenario paths
@@ -93,6 +94,9 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 
 	// Create universal tool manager (always available tools)
 	universalManager := tool.NewCompositeToolManager(todoToolManager, filesystemManager, bashToolManager)
+
+	// Create solver tool manager for CSP solving (separate from universal tools)
+	solverToolManager := tool.NewSolverToolManager()
 
 	// Create optional web tool manager for web scenarios
 	webToolManager := tool.NewWebToolManager()
@@ -141,17 +145,18 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	}
 
 	return &ScenarioRunner{
-		llmClient:        llmClient,
-		universalManager: universalManager,
-		todoToolManager:  todoToolManager,
-		webToolManager:   webToolManager.(*tool.WebToolManager),
-		mcpToolManagers:  mcpToolManagers,
-		workingDir:       workingDir,
-		sharedState:      sharedState,
-		scenarios:        scenarios,
-		sessionFilePath:  sessionFilePath,
-		settings:         settings,
-		logger:           logger.WithComponent("scenario-runner"),
+		llmClient:         llmClient,
+		universalManager:  universalManager,
+		todoToolManager:   todoToolManager,
+		webToolManager:    webToolManager.(*tool.WebToolManager),
+		solverToolManager: solverToolManager.(*tool.SolverToolManager),
+		mcpToolManagers:   mcpToolManagers,
+		workingDir:        workingDir,
+		sharedState:       sharedState,
+		scenarios:         scenarios,
+		sessionFilePath:   sessionFilePath,
+		settings:          settings,
+		logger:            logger.WithComponent("scenario-runner"),
 	}
 }
 
@@ -238,6 +243,11 @@ func (s *ScenarioRunner) getToolManagerForScenario(scenario string) domain.ToolM
 		// Add web tools if requested (for RESEARCH scenarios)
 		if toolScope.UseDefault { // "default" in old system meant web tools
 			managers = append(managers, s.webToolManager)
+		}
+
+		// Add solver tools if requested (for SOLVER scenarios)
+		if toolScope.UseSolver {
+			managers = append(managers, s.solverToolManager)
 		}
 
 		// Add MCP tools if requested
