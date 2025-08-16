@@ -65,6 +65,8 @@ func (s *ScenarioConfig) GetToolScope() domain.ToolScope {
 			scope.UseTodo = true
 		} else if toolLower == "bash" {
 			scope.UseBash = true
+		} else if toolLower == "solver" {
+			scope.UseSolver = true
 		} else if strings.HasPrefix(toolLower, "mcp:") {
 			// Extract MCP tool name (remove "mcp:" prefix, preserve case)
 			mcpName := strings.TrimPrefix(tool, "mcp:")
@@ -79,7 +81,7 @@ func (s *ScenarioConfig) GetToolScope() domain.ToolScope {
 	}
 
 	// Default to using default tools if nothing specified
-	if !scope.UseFilesystem && !scope.UseDefault && !scope.UseTodo && !scope.UseBash && len(scope.MCPTools) == 0 {
+	if !scope.UseFilesystem && !scope.UseDefault && !scope.UseTodo && !scope.UseBash && !scope.UseSolver && len(scope.MCPTools) == 0 {
 		scope.UseDefault = true
 	}
 
@@ -162,10 +164,11 @@ func loadScenarioFile(filePath string, scenarios ScenarioMap) error {
 		return fmt.Errorf("failed to parse scenario file %s: %w", filePath, err)
 	}
 
-	// Add scenarios to the map, setting the name
+	// Add scenarios to the map, setting the name and normalizing keys to uppercase for case-insensitive lookup
 	for scenarioName, scenarioConfig := range fileScenarios {
-		scenarioConfig.name = scenarioName
-		scenarios[scenarioName] = &scenarioConfig
+		scenarioConfig.name = scenarioName // Keep original name for display
+		normalizedName := strings.ToUpper(scenarioName) // Normalize key for case-insensitive lookup
+		scenarios[normalizedName] = &scenarioConfig
 	}
 
 	return nil

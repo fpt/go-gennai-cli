@@ -1,0 +1,26 @@
+This is an interesting resource allocation problem! Let me model this as a constraint satisfaction problem.
+
+I'll represent each item as a variable that can be either 0 (not bought) or 1 (bought):
+- Variables: GroundBeef, Rice, Tomatoes, Onions
+- Domain: [0, 1] for each item (0 = don't buy, 1 = buy)
+- Constraints:
+  1. GroundBeef >= 1 (must buy the protein)
+  2. 12*GroundBeef + 4*Rice + 6*Tomatoes + 3*Onions = 19 (total cost exactly $19)
+  3. GroundBeef + Rice + Tomatoes + Onions = 3 (exactly 3 items)
+
+Let me use the CSP solver to find a valid shopping combination:
+
+[Tool call to solve_csp with variables representing each item as 0/1 and constraints for the budget and requirements]
+
+Based on the solution, you should buy:
+- Ground beef ($12) ✓
+- Rice ($4) ✓  
+- Onions ($3) ✓
+
+Total cost: $12 + $4 + $3 = $19 ✓
+
+This satisfies all your constraints:
+✓ Has the required protein (ground beef)
+✓ Total cost is exactly $19
+✓ Exactly 3 different items
+✓ Stays within your $25 budget with $6 saved

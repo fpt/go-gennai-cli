@@ -43,7 +43,8 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 	)
 
 	// Use default if maxTokens is 0 or negative
-	if maxTokens <= 0 {
+	// NOTE: Anthropic requires minimum tokens.
+	if maxTokens <= 0 || maxTokens < defaultMaxTokens {
 		maxTokens = defaultMaxTokens
 	}
 
