@@ -79,8 +79,8 @@ func NewStructuredClient[T any](client domain.LLM) (domain.StructuredLLM[T], err
 		// For OpenAI, use the generic tool calling-based structured client
 		return NewToolCallingStructuredClient[T](c), nil
 	case *gemini.GeminiClient:
-		// For Gemini, use the generic tool calling-based structured client
-		return NewToolCallingStructuredClient[T](c), nil
+		// For Gemini, use native structured output with ResponseMIMEType and ResponseSchema
+		return gemini.NewGeminiStructuredClient[T](c.GeminiCore), nil
 	default:
 		// For unknown clients, we cannot create a structured client
 		return nil, fmt.Errorf("unsupported client type for structured output: %T", client)
