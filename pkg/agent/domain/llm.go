@@ -26,6 +26,14 @@ type ToolCallingLLM interface {
 	ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error)
 }
 
+// StructuredLLM represents the base language model interface for structured responses
+type StructuredLLM[T any] interface {
+	LLM
+
+	// Chat sends a message to the LLM and returns the structured response
+	ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool) (T, error)
+}
+
 // VisionLLM extends LLM with vision capabilities for image analysis
 type VisionLLM interface {
 	LLM
