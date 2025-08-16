@@ -65,22 +65,22 @@ func NewStructuredClient[T any](client domain.LLM) (domain.StructuredLLM[T], err
 		if ollama.IsJSONSchemaCapableModel(c.OllamaCore.Model()) {
 			// Use JSON Schema-based structured client
 			return ollama.NewOllamaStructuredClient[T](c.OllamaCore), nil
+		} else if ollama.IsToolCapableModel(c.OllamaCore.Model()) {
+			// Use generic tool calling-based structured client
+			return NewToolCallingStructuredClient[T](c), nil
 		} else {
-			// Model doesn't support JSON Schema (probably supports native tools)
-			return nil, fmt.Errorf("model %s does not support JSON Schema format for structured output", c.OllamaCore.Model())
+			// Model doesn't support either JSON Schema or tool calling
+			return nil, fmt.Errorf("model %s does not support structured output", c.OllamaCore.Model())
 		}
 	case *anthropic.AnthropicClient:
-		// For Anthropic, we could implement structured output using tool calling or native structured output
-		// For now, return an error indicating it's not yet implemented
-		return nil, fmt.Errorf("structured output not yet implemented for Anthropic clients")
+		// For Anthropic, use the generic tool calling-based structured client
+		return NewToolCallingStructuredClient[T](c), nil
 	case *openai.OpenAIClient:
-		// For OpenAI, we could use native structured output
-		// For now, return an error indicating it's not yet implemented
-		return nil, fmt.Errorf("structured output not yet implemented for OpenAI clients")
+		// For OpenAI, use the generic tool calling-based structured client
+		return NewToolCallingStructuredClient[T](c), nil
 	case *gemini.GeminiClient:
-		// For Gemini, we could use native structured output
-		// For now, return an error indicating it's not yet implemented
-		return nil, fmt.Errorf("structured output not yet implemented for Gemini clients")
+		// For Gemini, use the generic tool calling-based structured client
+		return NewToolCallingStructuredClient[T](c), nil
 	default:
 		// For unknown clients, we cannot create a structured client
 		return nil, fmt.Errorf("unsupported client type for structured output: %T", client)
