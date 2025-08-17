@@ -31,7 +31,7 @@ type StructuredLLM[T any] interface {
 	LLM
 
 	// Chat sends a message to the LLM and returns the structured response
-	ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool) (T, error)
+	ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error)
 }
 
 // VisionLLM extends LLM with vision capabilities for image analysis

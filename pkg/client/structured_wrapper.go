@@ -35,9 +35,9 @@ func NewToolCallingStructuredClient[T any](client domain.ToolCallingLLM) *ToolCa
 }
 
 // Chat implements the base LLM interface
-func (c *ToolCallingStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *ToolCallingStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert structured response to regular message
-	result, err := c.ChatWithStructure(ctx, messages, enableThinking)
+	result, err := c.ChatWithStructure(ctx, messages, enableThinking, thinkingChan)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (c *ToolCallingStructuredClient[T]) Chat(ctx context.Context, messages []me
 }
 
 // ChatWithStructure implements StructuredLLM interface using tool calling
-func (c *ToolCallingStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool) (T, error) {
+func (c *ToolCallingStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error) {
 	var zero T
 	
 	// Get the type of T for schema generation
@@ -86,7 +86,7 @@ func (c *ToolCallingStructuredClient[T]) ChatWithStructure(ctx context.Context, 
 	}
 	
 	// Call the LLM with forced tool choice
-	response, err := c.client.ChatWithToolChoice(ctx, enhancedMessages, toolChoice)
+	response, err := c.client.ChatWithToolChoice(ctx, enhancedMessages, toolChoice, enableThinking, thinkingChan)
 	if err != nil {
 		return zero, fmt.Errorf("tool calling failed: %w", err)
 	}

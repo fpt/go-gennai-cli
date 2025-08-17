@@ -88,7 +88,7 @@ func simpleStructuredExample() error {
 	}
 
 	// Get structured response
-	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false)
+	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false, nil)
 	if err != nil {
 		return fmt.Errorf("structured chat failed: %w", err)
 	}
@@ -124,7 +124,7 @@ func toolCallingStructuredExample() error {
 	}
 
 	// Get structured response using tool calling
-	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false)
+	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false, nil)
 	if err != nil {
 		return fmt.Errorf("structured chat failed: %w", err)
 	}
@@ -159,7 +159,7 @@ func complexStructuredExample() error {
 	}
 
 	// Get structured response
-	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false)
+	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false, nil)
 	if err != nil {
 		return fmt.Errorf("structured chat failed: %w", err)
 	}

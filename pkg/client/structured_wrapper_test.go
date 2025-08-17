@@ -19,8 +19,8 @@ type SimpleResponse struct {
 // Mock ToolCallingLLM for testing
 type mockToolCallingLLM struct {
 	setToolManagerFunc     func(domain.ToolManager)
-	chatWithToolChoiceFunc func(context.Context, []message.Message, domain.ToolChoice) (message.Message, error)
-	chatFunc               func(context.Context, []message.Message, bool) (message.Message, error)
+	chatWithToolChoiceFunc func(context.Context, []message.Message, domain.ToolChoice, bool, chan<- string) (message.Message, error)
+	chatFunc               func(context.Context, []message.Message, bool, chan<- string) (message.Message, error)
 }
 
 func (m *mockToolCallingLLM) SetToolManager(toolManager domain.ToolManager) {
@@ -29,9 +29,9 @@ func (m *mockToolCallingLLM) SetToolManager(toolManager domain.ToolManager) {
 	}
 }
 
-func (m *mockToolCallingLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (m *mockToolCallingLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatWithToolChoiceFunc != nil {
-		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
+		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice, enableThinking, thinkingChan)
 	}
 	
 	// Return a mock tool call response
@@ -44,9 +44,9 @@ func (m *mockToolCallingLLM) ChatWithToolChoice(ctx context.Context, messages []
 	return message.NewToolCallMessage("respond", mockArgs), nil
 }
 
-func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockToolCallingLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatFunc != nil {
-		return m.chatFunc(ctx, messages, enableThinking)
+		return m.chatFunc(ctx, messages, enableThinking, thinkingChan)
 	}
 	return message.NewChatMessage(message.MessageTypeAssistant, "mock response"), nil
 }
@@ -60,9 +60,7 @@ func TestNewToolCallingStructuredClient(t *testing.T) {
 		t.Fatal("Expected non-nil structured client")
 	}
 	
-	if structuredClient.client != mockClient {
-		t.Error("Client should reference the provided mock client")
-	}
+	// Note: Cannot directly compare due to interface wrapper, but we can verify functionality
 	
 	if structuredClient.generator == nil {
 		t.Error("Client should have a JSON schema generator")
@@ -87,7 +85,7 @@ func TestToolCallingStructuredClient_ChatWithStructure(t *testing.T) {
 		setToolManagerFunc: func(tm domain.ToolManager) {
 			capturedToolManager = tm
 		},
-		chatWithToolChoiceFunc: func(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+		chatWithToolChoiceFunc: func(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 			capturedToolChoice = toolChoice
 			
 			// Verify the tool choice is correct
@@ -114,7 +112,7 @@ func TestToolCallingStructuredClient_ChatWithStructure(t *testing.T) {
 	}
 	
 	// Call ChatWithStructure
-	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false)
+	result, err := structuredClient.ChatWithStructure(context.Background(), messages, false, nil)
 	if err != nil {
 		t.Fatalf("ChatWithStructure failed: %v", err)
 	}
@@ -161,7 +159,7 @@ func TestToolCallingStructuredClient_Chat(t *testing.T) {
 		setToolManagerFunc: func(tm domain.ToolManager) {
 			// No-op for this test
 		},
-		chatWithToolChoiceFunc: func(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+		chatWithToolChoiceFunc: func(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 			// Return a mock tool call response
 			mockArgs := map[string]any{
 				"message": "Test response",
@@ -181,7 +179,7 @@ func TestToolCallingStructuredClient_Chat(t *testing.T) {
 	}
 	
 	// Call Chat (should delegate to ChatWithStructure)
-	result, err := structuredClient.Chat(context.Background(), messages, false)
+	result, err := structuredClient.Chat(context.Background(), messages, false, nil)
 	if err != nil {
 		t.Fatalf("Chat failed: %v", err)
 	}

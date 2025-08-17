@@ -218,11 +218,11 @@ func TestGeminiStructuredClient_InterfaceCompliance(t *testing.T) {
 
 	// Should implement LLM interface
 	var _ interface {
-		Chat(context.Context, []message.Message, bool) (message.Message, error)
+		Chat(context.Context, []message.Message, bool, chan<- string) (message.Message, error)
 	} = client
 
 	// Should implement StructuredLLM interface
 	var _ interface {
-		ChatWithStructure(context.Context, []message.Message, bool) (TestResponse, error)
+		ChatWithStructure(context.Context, []message.Message, bool, chan<- string) (TestResponse, error)
 	} = client
 }

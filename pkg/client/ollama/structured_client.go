@@ -27,9 +27,9 @@ func NewOllamaStructuredClient[T any](core *OllamaCore) *OllamaStructuredClient[
 }
 
 // Chat implements the base LLM interface
-func (c *OllamaStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *OllamaStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert structured response to regular message
-	result, err := c.ChatWithStructure(ctx, messages, enableThinking)
+	result, err := c.ChatWithStructure(ctx, messages, enableThinking, thinkingChan)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (c *OllamaStructuredClient[T]) Chat(ctx context.Context, messages []message
 }
 
 // ChatWithStructure implements StructuredLLM interface using JSON Schema
-func (c *OllamaStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool) (T, error) {
+func (c *OllamaStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error) {
 	var zero T
 
 	// Get the type of T for schema generation

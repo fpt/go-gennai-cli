@@ -26,9 +26,9 @@ func NewGeminiStructuredClient[T any](core *GeminiCore) *GeminiStructuredClient[
 }
 
 // Chat implements the base LLM interface
-func (c *GeminiStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *GeminiStructuredClient[T]) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert structured response to regular message
-	result, err := c.ChatWithStructure(ctx, messages, enableThinking)
+	result, err := c.ChatWithStructure(ctx, messages, enableThinking, thinkingChan)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (c *GeminiStructuredClient[T]) Chat(ctx context.Context, messages []message
 }
 
 // ChatWithStructure implements StructuredLLM interface using Gemini's native structured output
-func (c *GeminiStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool) (T, error) {
+func (c *GeminiStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error) {
 	var zero T
 	
 	// Generate Gemini schema from Go struct type
