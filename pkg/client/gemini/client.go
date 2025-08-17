@@ -73,7 +73,7 @@ func NewGeminiClientFromCore(core *GeminiCore) *GeminiClient {
 }
 
 // Chat implements the basic LLM interface with thinking control
-func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert internal messages to Gemini format
 	geminiContents := make([]*genai.Content, 0)
 	var systemInstruction *genai.Content
@@ -122,7 +122,7 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 		}
 
 		// Use streaming for progressive thinking display (no tool handling in basic chat)
-		return c.chatWithStreaming(ctx, geminiContents, config, true, false)
+		return c.chatWithStreaming(ctx, geminiContents, config, true, false, enableThinking, thinkingChan)
 	}
 
 	// Generate content using the Models interface (non-streaming)
@@ -173,13 +173,12 @@ func (c *GeminiClient) isThinkingCapable() bool {
 
 // chatWithStreaming handles streaming generation with progressive thinking display
 // The handleTools parameter controls whether to process function calls or treat them as regular text
-func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool, handleTools bool) (message.Message, error) {
+func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.Content, config *genai.GenerateContentConfig, showThinking bool, handleTools bool, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Create streaming generator
 	stream := c.client.Models.GenerateContentStream(ctx, c.model, contents, config)
 
 	var responseText strings.Builder
 	var thinkingText strings.Builder
-	hasShownThinkingHeader := false
 	var toolCalls []any // To collect any tool calls
 
 	// Process streaming responses using the iter.Seq2 pattern
@@ -201,15 +200,10 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 				// Handle regular text content
 				if part.Text != "" {
 					if showThinking {
-						// Show thinking header only once
-						if !hasShownThinkingHeader {
-							fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-							hasShownThinkingHeader = true
+						// Send thinking content to channel if enabled
+						if enableThinking && thinkingChan != nil {
+							message.SendThinkingContent(thinkingChan, part.Text)
 						}
-
-						// Display progressive text in light gray
-						fmt.Printf("\x1b[90m%s", part.Text) // Light gray
-						os.Stdout.Sync()                    // Force flush
 					}
 
 					// Accumulate all text
@@ -219,9 +213,9 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 		}
 	}
 
-	// Reset color and add newline if we showed thinking
-	if hasShownThinkingHeader {
-		fmt.Print("\x1b[0m\n") // Reset color
+	// Signal end of thinking if we accumulated thinking content
+	if thinkingText.Len() > 0 && enableThinking && thinkingChan != nil {
+		message.EndThinking(thinkingChan)
 	}
 
 	// Check if we have tool calls to return (only when tool handling is enabled)
@@ -274,7 +268,7 @@ func (c *GeminiClient) IsToolCapable() bool {
 }
 
 // ChatWithToolChoice implements ToolCallingLLM interface with tool manager integration
-func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert internal messages to Gemini format
 	geminiContents := make([]*genai.Content, 0)
 	var systemInstruction *genai.Content
@@ -354,7 +348,7 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 
 		// Use streaming for progressive thinking display with tool handling enabled
-		return c.chatWithStreaming(ctx, geminiContents, config, true, true)
+		return c.chatWithStreaming(ctx, geminiContents, config, true, true, enableThinking, thinkingChan)
 	}
 
 	// Generate content using the Models interface (non-streaming)

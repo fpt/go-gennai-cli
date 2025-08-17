@@ -30,7 +30,7 @@ func TestReAct_chatWithToolChoice(t *testing.T) {
 	userMessage := message.NewChatMessage(message.MessageTypeUser, "Hello")
 	messages := []message.Message{userMessage}
 
-	result, err := react.chatWithToolChoice(ctx, messages, expectedToolChoice)
+	result, err := react.chatWithToolChoice(ctx, messages, expectedToolChoice, nil)
 
 	if err != nil {
 		t.Fatalf("chatWithToolChoice returned error: %v", err)
@@ -60,7 +60,7 @@ func TestReAct_chatWithToolChoice_Fallback(t *testing.T) {
 	messages := []message.Message{userMessage}
 	toolChoice := domain.NewToolChoiceAny()
 
-	result, err := react.chatWithToolChoice(ctx, messages, toolChoice)
+	result, err := react.chatWithToolChoice(ctx, messages, toolChoice, nil)
 
 	if err != nil {
 		t.Fatalf("chatWithToolChoice returned error: %v", err)

@@ -94,7 +94,7 @@ func (c *AnthropicClient) IsToolCapable() bool {
 }
 
 // ChatWithToolChoice sends a message to Claude with tool choice control
-func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to Anthropic format
 	anthropicMessages := toAnthropicMessages(messages)
 
@@ -134,7 +134,7 @@ func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []mes
 	}
 
 	// Always use streaming for all models (thinking display only if enabled and no tool results)
-	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking)
+	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
 }
 
 // SetToolManager sets the tool manager for dynamic tool definitions
@@ -149,7 +149,7 @@ func (c *AnthropicClient) SupportsVision() bool {
 }
 
 // ChatWithThinking sends a message to Claude with thinking control
-func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to Anthropic format
 	anthropicMessages := toAnthropicMessages(messages)
 
@@ -183,11 +183,11 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, 
 	}
 
 	// Use streaming for all models (thinking display only if enabled and supported)
-	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking)
+	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
 }
 
 // chatWithStreaming handles streaming generation with progressive thinking display using Message.Accumulate pattern
-func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams anthropic.MessageNewParams, showThinking bool) (message.Message, error) {
+func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams anthropic.MessageNewParams, showThinking bool, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Create streaming request
 	stream := c.client.Messages.NewStreaming(ctx, messageParams)
 
@@ -195,7 +195,6 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 	var acc anthropic.Message
 	var thinkingBuilder strings.Builder
 	var signatureBuilder strings.Builder
-	hasShownThinkingHeader := false
 
 	// Process streaming events
 	for stream.Next() {
@@ -212,15 +211,10 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 			if delta, ok := eventData.Delta.AsAny().(anthropic.ThinkingDelta); ok {
 				// Thinking content - show progressively
 				if delta.Thinking != "" && showThinking {
-					// Show thinking header only once
-					if !hasShownThinkingHeader {
-						fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-						hasShownThinkingHeader = true
+					// Send thinking content to channel if enabled
+					if enableThinking && thinkingChan != nil {
+						message.SendThinkingContent(thinkingChan, delta.Thinking)
 					}
-
-					// Display progressive thinking in light gray
-					fmt.Printf("\x1b[90m%s", delta.Thinking) // Light gray
-					os.Stdout.Sync()                         // Force flush
 
 					// Accumulate thinking content
 					thinkingBuilder.WriteString(delta.Thinking)
@@ -234,15 +228,12 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 
 		case anthropic.ContentBlockStartEvent:
 			if block, ok := eventData.ContentBlock.AsAny().(anthropic.ThinkingBlock); ok {
-				// Thinking block started
-				if showThinking && !hasShownThinkingHeader {
-					fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-					hasShownThinkingHeader = true
-				}
-				// Add initial thinking content if present
+				// Thinking block started - send initial thinking content if present
 				if block.Thinking != "" && showThinking {
-					fmt.Printf("\x1b[90m%s", block.Thinking)
-					os.Stdout.Sync()
+					// Send thinking content to channel if enabled
+					if enableThinking && thinkingChan != nil {
+						message.SendThinkingContent(thinkingChan, block.Thinking)
+					}
 					thinkingBuilder.WriteString(block.Thinking)
 				}
 			}
@@ -254,9 +245,9 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 		return nil, fmt.Errorf("anthropic streaming error: %w", stream.Err())
 	}
 
-	// Reset color and add newline if we showed thinking
-	if hasShownThinkingHeader {
-		fmt.Print("\x1b[0m\n") // Reset color
+	// Signal end of thinking if we accumulated thinking content
+	if thinkingBuilder.Len() > 0 && enableThinking && thinkingChan != nil {
+		message.EndThinking(thinkingChan)
 	}
 
 	// Now process the accumulated message like the non-streaming version

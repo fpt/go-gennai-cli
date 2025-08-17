@@ -76,10 +76,10 @@ func NewOpenAIClientFromCore(core *OpenAICore) domain.ToolCallingLLM {
 }
 
 // Chat implements the basic LLM interface with thinking control
-func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Use streaming for progressive display when thinking is enabled
 	if enableThinking {
-		return c.chatWithStreaming(ctx, messages, true)
+		return c.chatWithStreaming(ctx, messages, true, thinkingChan)
 	}
 
 	// Convert messages to proper structured input
@@ -183,7 +183,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 }
 
 // chatWithStreaming handles streaming responses using the Responses API
-func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message.Message, showThinking bool) (message.Message, error) {
+func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message.Message, showThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to proper structured input
 	inputItems := c.convertMessagesToResponsesInputItems(messages)
 
@@ -251,8 +251,10 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 			// This is reasoning content - accumulate it for thinking
 			if eventData.Delta != "" {
 				reasoningBuilder.WriteString(eventData.Delta)
-				// Display reasoning with visual indicator
-				fmt.Printf("\x1b[90m%s\x1b[0m", eventData.Delta) // Gray color for reasoning
+				// Send reasoning content to thinking channel if enabled
+				if showThinking && thinkingChan != nil {
+					message.SendThinkingContent(thinkingChan, eventData.Delta)
+				}
 				if os.Getenv("DEBUG_TOOLS") == "1" {
 					fmt.Printf("[DEBUG: ReasoningDelta: '%s']", eventData.Delta)
 				}
@@ -260,7 +262,10 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 		case responses.ResponseReasoningTextDoneEvent:
 			// Reasoning is complete
 			if reasoningBuilder.Len() > 0 {
-				fmt.Printf("\n") // New line after reasoning
+				// Signal end of thinking
+				if showThinking && thinkingChan != nil {
+					message.EndThinking(thinkingChan)
+				}
 				if os.Getenv("DEBUG_TOOLS") == "1" {
 					fmt.Printf("DEBUG: ReasoningDone, total length: %d\n", reasoningBuilder.Len())
 				}
@@ -399,13 +404,7 @@ func (c *OpenAIClient) IsToolCapable() bool {
 }
 
 // ChatWithToolChoice implements ToolCallingLLM interface with native OpenAI tool calling
-func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
-	// Always use Responses API
-	return c.chatWithToolChoice(ctx, messages, toolChoice)
-}
-
-// chatWithToolChoice handles tool calling using the Responses API
-func (c *OpenAIClient) chatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to proper structured input
 	inputItems := c.convertMessagesToResponsesInputItems(messages)
 
@@ -449,11 +448,11 @@ func (c *OpenAIClient) chatWithToolChoice(ctx context.Context, messages []messag
 	}
 
 	// Use streaming for progressive tool call display
-	return c.chatWithToolChoiceStreaming(ctx, params)
+	return c.chatWithToolChoiceStreaming(ctx, params, enableThinking, thinkingChan)
 }
 
 // chatWithToolChoiceStreaming handles streaming tool calls using Responses API
-func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params responses.ResponseNewParams) (message.Message, error) {
+func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params responses.ResponseNewParams, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Create streaming response
 	stream := c.client.Responses.NewStreaming(ctx, params)
 
@@ -483,8 +482,10 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 			// This is reasoning content - accumulate it for thinking
 			if eventData.Delta != "" {
 				reasoningBuilder.WriteString(eventData.Delta)
-				// Display reasoning with visual indicator
-				fmt.Printf("\x1b[90m%s\x1b[0m", eventData.Delta) // Gray color for reasoning
+				// Send reasoning content to thinking channel if enabled
+				if enableThinking && thinkingChan != nil {
+					message.SendThinkingContent(thinkingChan, eventData.Delta)
+				}
 				if os.Getenv("DEBUG_TOOLS") == "1" {
 					fmt.Printf("[DEBUG: ReasoningDelta: '%s']", eventData.Delta)
 				}
@@ -492,7 +493,10 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 		case responses.ResponseReasoningTextDoneEvent:
 			// Reasoning is complete
 			if reasoningBuilder.Len() > 0 {
-				fmt.Printf("\n") // New line after reasoning
+				// Signal end of thinking
+				if enableThinking && thinkingChan != nil {
+					message.EndThinking(thinkingChan)
+				}
 				if os.Getenv("DEBUG_TOOLS") == "1" {
 					fmt.Printf("DEBUG: ReasoningDone, total length: %d\n", reasoningBuilder.Len())
 				}

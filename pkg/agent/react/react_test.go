@@ -22,7 +22,7 @@ type mockLLM struct {
 	toolManager            domain.ToolManager // Store the tool manager
 }
 
-func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
+func (m *mockLLM) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, messages)
 	}
@@ -46,12 +46,12 @@ func (m *mockLLM) GetToolManager() domain.ToolManager {
 }
 
 // ChatWithToolChoice sends a message with tool choice control (mock implementation)
-func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (m *mockLLM) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	if m.chatWithToolChoiceFunc != nil {
 		return m.chatWithToolChoiceFunc(ctx, messages, toolChoice)
 	}
 	// Fall back to regular chat for mock
-	return m.Chat(ctx, messages, false)
+	return m.Chat(ctx, messages, false, thinkingChan)
 }
 
 // Mock ToolManager
@@ -183,7 +183,7 @@ func TestReAct_Invoke_ChatMessage(t *testing.T) {
 	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Invoke(ctx, "Hello", nil)
 
 	if err != nil {
 		t.Fatalf("Invoke returned error: %v", err)
@@ -248,7 +248,7 @@ func TestReAct_Invoke_ToolCall(t *testing.T) {
 	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), mockAlign, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Use test tool")
+	result, err := react.Invoke(ctx, "Use test tool", nil)
 
 	if err != nil {
 		t.Fatalf("Invoke returned error: %v", err)
@@ -302,7 +302,7 @@ func TestReAct_Invoke_LLMError(t *testing.T) {
 	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Invoke(ctx, "Hello", nil)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -339,7 +339,7 @@ func TestReAct_Invoke_ToolError(t *testing.T) {
 	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Use test tool")
+	result, err := react.Invoke(ctx, "Use test tool", nil)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -399,7 +399,7 @@ func TestReAct_Invoke_UnexpectedResponseType(t *testing.T) {
 	react := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Invoke(ctx, "Hello", nil)
 
 	if err == nil {
 		t.Fatal("Expected error for unexpected response type, got nil")
@@ -526,13 +526,13 @@ func TestReAct_StateManagement(t *testing.T) {
 	ctx := context.Background()
 
 	// First invocation
-	_, err := react.Invoke(ctx, "Hello")
+	_, err := react.Invoke(ctx, "Hello", nil)
 	if err != nil {
 		t.Fatalf("First invoke error: %v", err)
 	}
 
 	// Second invocation - should have previous messages
-	_, err = react.Invoke(ctx, "How are you?")
+	_, err = react.Invoke(ctx, "How are you?", nil)
 	if err != nil {
 		t.Fatalf("Second invoke error: %v", err)
 	}

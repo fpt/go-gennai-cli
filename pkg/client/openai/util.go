@@ -117,14 +117,7 @@ func getModelCapabilities(model string) ModelCapabilities {
 	case modelGPT4oMini:
 		return modelCapabilities[modelGPT4oMini]
 	default:
-		// Default capabilities for unknown models
-		return ModelCapabilities{
-			SupportsVision:       false,
-			SupportsToolCalling:  true,
-			SupportsStructured:   true,
-			SupportsThinking:     false, // Unknown models default to no reasoning
-			MaxTokens:            4096,
-			SupportsSystemPrompt: true,
-		}
+		// Default to GPT-5 Mini for unknown models (most versatile option)
+		return modelCapabilities[modelGPT5Mini]
 	}
 }

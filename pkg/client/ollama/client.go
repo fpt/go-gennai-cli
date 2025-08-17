@@ -3,7 +3,6 @@ package ollama
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -63,11 +62,10 @@ func (c *OllamaCore) Model() string {
 	return c.model
 }
 
-func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest) (api.Message, error) {
+func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thinkingChan chan<- string) (api.Message, error) {
 	var result api.Message
 	var contentBuilder strings.Builder
 	var thinkingBuilder strings.Builder
-	var hasShownThinkingHeader bool
 
 	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
 		// Accumulate content and thinking from streaming responses
@@ -76,25 +74,18 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest) (ap
 		}
 
 		if resp.Message.Thinking != "" {
-			// Show thinking header only once when first thinking token arrives
-			if !hasShownThinkingHeader && shouldShowThinking(c.thinking, chatRequest.Think) {
-				fmt.Print("\x1b[90m💭 ") // Light gray color + thinking emoji
-				hasShownThinkingHeader = true
-			}
-
-			// Display thinking tokens progressively in light gray (only if thinking is enabled)
-			if shouldShowThinking(c.thinking, chatRequest.Think) {
-				fmt.Printf("\x1b[90m%s", resp.Message.Thinking) // Light gray (keep color active)
-				os.Stdout.Sync()                                // Ensure immediate display of thinking tokens
+			// Send thinking content to channel if enabled
+			if shouldShowThinking(c.thinking, chatRequest.Think) && thinkingChan != nil {
+				message.SendThinkingContent(thinkingChan, resp.Message.Thinking)
 			}
 
 			thinkingBuilder.WriteString(resp.Message.Thinking)
 		}
 
 		if resp.Done {
-			// Add newline after thinking if it was shown
-			if hasShownThinkingHeader {
-				fmt.Print("\x1b[0m\n") // Reset color and newline
+			// Signal end of thinking if we accumulated thinking content
+			if thinkingBuilder.Len() > 0 && thinkingChan != nil {
+				message.EndThinking(thinkingChan)
 			}
 
 			// Combine accumulated content and thinking
@@ -193,7 +184,7 @@ func (c *OllamaClient) SupportsVision() bool {
 }
 
 // ChatWithToolChoice sends a message to Ollama with tool choice control
-func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice) (message.Message, error) {
+func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert to Ollama format
 	ollamaMessages := toOllamaMessages(messages)
 
@@ -229,7 +220,7 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
-	result, err := c.chat(ctx, chatRequest)
+	result, err := c.chat(ctx, chatRequest, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
@@ -248,7 +239,7 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 }
 
 // chatWithOptions is a private helper that consolidates chat logic
-func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.Message, enableThinking *bool) (message.Message, error) {
+func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.Message, enableThinking *bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert to Ollama format
 	ollamaMessages := toOllamaMessages(messages)
 
@@ -289,7 +280,7 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 		}
 	}
 
-	result, err := c.chat(ctx, chatRequest)
+	result, err := c.chat(ctx, chatRequest, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
@@ -332,6 +323,6 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 }
 
 // Chat sends a message to Ollama with thinking control
-func (c *OllamaClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool) (message.Message, error) {
-	return c.chatWithOptions(ctx, messages, &enableThinking)
+func (c *OllamaClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
+	return c.chatWithOptions(ctx, messages, &enableThinking, thinkingChan)
 }
