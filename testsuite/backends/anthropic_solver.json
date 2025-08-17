@@ -1,9 +1,0 @@
-{
-  "name": "anthropic_solver",
-  "llm": {
-    "backend": "anthropic",
-    "model": "claude-3-7-sonnet-latest",
-    "maxTokens": 2048
-  },
-  "scenario": "SOLVER"
-}
