@@ -1,0 +1,21 @@
+I'm setting up a simple build pipeline and need to determine the correct order for building components. Can you help me figure out the build sequence?
+
+Problem: Determine the build order for these 4 components:
+
+Components:
+- Database (no dependencies)
+- Library (depends on Database)
+- Service (depends on Library) 
+- Tests (depends on Service)
+
+Dependencies (component A → component B means A must be built before B):
+- Database → Library
+- Library → Service
+- Service → Tests
+
+I need to:
+- Determine the correct build order
+- Verify that no circular dependencies exist
+- Get the complete build sequence
+
+Expected result: A valid build order that respects all component dependencies.

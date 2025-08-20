@@ -1,0 +1,22 @@
+I'm managing a simple project and need to determine the task sequence. Can you help me create a project timeline?
+
+Problem: Plan the execution order for these 4 project tasks:
+
+Project Tasks:
+- Plan (no dependencies - starting task)
+- Design (depends on Plan)
+- Build (depends on Design)
+- Test (depends on Build)
+
+Task Dependencies (task A → task B means A must complete before B starts):
+- Plan → Design
+- Design → Build  
+- Build → Test
+
+I need to:
+- Determine the correct task execution order
+- Ensure all task dependencies are satisfied
+- Verify there are no circular dependencies
+- Get the complete task sequence
+
+Expected result: A valid task execution order that respects all project dependencies.

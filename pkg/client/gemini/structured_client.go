@@ -32,47 +32,47 @@ func (c *GeminiStructuredClient[T]) Chat(ctx context.Context, messages []message
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Marshal the structured result to JSON
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal structured response: %w", err)
 	}
-	
+
 	return message.NewChatMessage(message.MessageTypeAssistant, string(jsonBytes)), nil
 }
 
 // ChatWithStructure implements StructuredLLM interface using Gemini's native structured output
 func (c *GeminiStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error) {
 	var zero T
-	
+
 	// Generate Gemini schema from Go struct type
 	geminiSchema, err := c.generateGeminiSchema(reflect.TypeOf(zero))
 	if err != nil {
 		return zero, fmt.Errorf("failed to generate Gemini schema: %w", err)
 	}
-	
+
 	// Convert messages to Gemini format
 	geminiContents, systemInstruction := c.convertMessagesToGemini(messages)
-	
+
 	// Create structured output configuration
 	config := &genai.GenerateContentConfig{
 		ResponseMIMEType: "application/json",
 		ResponseSchema:   geminiSchema,
 	}
-	
+
 	// Add system instruction if present
 	if systemInstruction != nil {
 		config.SystemInstruction = systemInstruction
 	}
-	
+
 	// Add thinking parameter if supported and enabled
 	if enableThinking && c.isThinkingCapable() {
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			IncludeThoughts: true,
 		}
 	}
-	
+
 	// Generate content using Gemini's structured output
 	result, err := c.core.client.Models.GenerateContent(
 		ctx,
@@ -83,13 +83,13 @@ func (c *GeminiStructuredClient[T]) ChatWithStructure(ctx context.Context, messa
 	if err != nil {
 		return zero, fmt.Errorf("gemini generate content failed: %w", err)
 	}
-	
+
 	// Parse the JSON response into the target type
 	var parsedResult T
 	if err := json.Unmarshal([]byte(result.Text()), &parsedResult); err != nil {
 		return zero, fmt.Errorf("failed to unmarshal structured response: %w", err)
 	}
-	
+
 	return parsedResult, nil
 }
 
@@ -111,34 +111,34 @@ func (c *GeminiStructuredClient[T]) generateGeminiSchema(structType reflect.Type
 	if structType.Kind() == reflect.Ptr {
 		structType = structType.Elem()
 	}
-	
+
 	if structType.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("expected struct type, got %v", structType.Kind())
 	}
-	
+
 	// Create the root schema as an object
 	schema := &genai.Schema{
 		Type:       genai.TypeObject,
 		Properties: make(map[string]*genai.Schema),
 	}
-	
+
 	var propertyOrdering []string
-	
+
 	// Process struct fields
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
-		
+
 		// Skip unexported fields
 		if !field.IsExported() {
 			continue
 		}
-		
+
 		// Get JSON tag name
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "-" {
 			continue
 		}
-		
+
 		fieldName := field.Name
 		if jsonTag != "" {
 			parts := strings.Split(jsonTag, ",")
@@ -146,20 +146,20 @@ func (c *GeminiStructuredClient[T]) generateGeminiSchema(structType reflect.Type
 				fieldName = parts[0]
 			}
 		}
-		
+
 		// Generate schema for this field
 		fieldSchema, err := c.generateFieldSchema(field.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate schema for field %s: %w", fieldName, err)
 		}
-		
+
 		schema.Properties[fieldName] = fieldSchema
 		propertyOrdering = append(propertyOrdering, fieldName)
 	}
-	
+
 	// Set property ordering for consistent JSON output
 	schema.PropertyOrdering = propertyOrdering
-	
+
 	return schema, nil
 }
 
@@ -169,7 +169,7 @@ func (c *GeminiStructuredClient[T]) generateFieldSchema(fieldType reflect.Type) 
 	if fieldType.Kind() == reflect.Ptr {
 		fieldType = fieldType.Elem()
 	}
-	
+
 	switch fieldType.Kind() {
 	case reflect.String:
 		return &genai.Schema{Type: genai.TypeString}, nil

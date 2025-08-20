@@ -14,10 +14,10 @@ func TestSolverToolManager_IntegrationTest(t *testing.T) {
 
 	// Test simple CSP: X != Y with domains [1,2]
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1,2], "Y":[1,2]}`,
-		"constraints":          `["X != Y"]`,
-		"use_arc_consistency":  true,
-		"timeout_seconds":      5.0,
+		"variables":           `{"X":[1,2], "Y":[1,2]}`,
+		"constraints":         `["X != Y"]`,
+		"use_arc_consistency": true,
+		"timeout_seconds":     5.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)
@@ -49,10 +49,10 @@ func TestSolverToolManager_UnsatisfiableCSP(t *testing.T) {
 	// Test unsatisfiable CSP: X = Y and X != Y with same domains
 	// Disable arc consistency to avoid panics in the centipede library
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1], "Y":[1]}`,
-		"constraints":          `["X = Y", "X != Y"]`,
-		"use_arc_consistency":  false, // Avoid centipede library panic
-		"timeout_seconds":      5.0,
+		"variables":           `{"X":[1], "Y":[1]}`,
+		"constraints":         `["X = Y", "X != Y"]`,
+		"use_arc_consistency": false, // Avoid centipede library panic
+		"timeout_seconds":     5.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)
@@ -75,10 +75,10 @@ func TestSolverToolManager_AllUniqueConstraint(t *testing.T) {
 
 	// Test AllUnique constraint: three variables all must be different
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1,2,3], "Y":[1,2,3], "Z":[1,2,3]}`,
-		"constraints":          `["AllUnique([X,Y,Z])"]`,
-		"use_arc_consistency":  false, // Test without arc consistency
-		"timeout_seconds":      5.0,
+		"variables":           `{"X":[1,2,3], "Y":[1,2,3], "Z":[1,2,3]}`,
+		"constraints":         `["AllUnique([X,Y,Z])"]`,
+		"use_arc_consistency": false, // Test without arc consistency
+		"timeout_seconds":     5.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)
@@ -111,10 +111,10 @@ func TestSolverToolManager_UnaryConstraints(t *testing.T) {
 
 	// Test unary constraints: X = 2, Y != 2
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1,2,3], "Y":[1,2,3]}`,
-		"constraints":          `["X = 2", "Y != 2"]`,
-		"use_arc_consistency":  true,
-		"timeout_seconds":      5.0,
+		"variables":           `{"X":[1,2,3], "Y":[1,2,3]}`,
+		"constraints":         `["X = 2", "Y != 2"]`,
+		"use_arc_consistency": true,
+		"timeout_seconds":     5.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)
@@ -146,10 +146,10 @@ func TestSolverToolManager_InvalidJSON(t *testing.T) {
 
 	// Test invalid JSON in variables
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1,2,3], "Y":invalid}`, // invalid JSON
-		"constraints":          `["X != Y"]`,
-		"use_arc_consistency":  true,
-		"timeout_seconds":      5.0,
+		"variables":           `{"X":[1,2,3], "Y":invalid}`, // invalid JSON
+		"constraints":         `["X != Y"]`,
+		"use_arc_consistency": true,
+		"timeout_seconds":     5.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)

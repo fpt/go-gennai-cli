@@ -19,48 +19,48 @@ func (g *GBNFGenerator) GenerateGrammar(structType reflect.Type) (string, error)
 	if structType.Kind() == reflect.Ptr {
 		structType = structType.Elem()
 	}
-	
+
 	if structType.Kind() != reflect.Struct {
 		return "", fmt.Errorf("expected struct type, got %v", structType.Kind())
 	}
 
 	rules := make(map[string]string)
 	rootRule := g.generateStructRule(structType, "root", rules)
-	
+
 	// Build the complete grammar
 	var grammarParts []string
 	grammarParts = append(grammarParts, fmt.Sprintf("root ::= %s", rootRule))
-	
+
 	// Add all generated rules
 	for name, rule := range rules {
 		if name != "root" {
 			grammarParts = append(grammarParts, fmt.Sprintf("%s ::= %s", name, rule))
 		}
 	}
-	
+
 	// Add basic primitive rules
 	grammarParts = append(grammarParts, g.getPrimitiveRules()...)
-	
+
 	return strings.Join(grammarParts, "\n"), nil
 }
 
 // generateStructRule generates a GBNF rule for a struct
 func (g *GBNFGenerator) generateStructRule(structType reflect.Type, ruleName string, rules map[string]string) string {
 	var fields []string
-	
+
 	for i := 0; i < structType.NumField(); i++ {
 		field := structType.Field(i)
-		
+
 		// Skip unexported fields
 		if !field.IsExported() {
 			continue
 		}
-		
+
 		jsonTag := field.Tag.Get("json")
 		if jsonTag == "-" {
 			continue
 		}
-		
+
 		fieldName := field.Name
 		if jsonTag != "" {
 			parts := strings.Split(jsonTag, ",")
@@ -68,15 +68,15 @@ func (g *GBNFGenerator) generateStructRule(structType reflect.Type, ruleName str
 				fieldName = parts[0]
 			}
 		}
-		
+
 		fieldRule := g.generateFieldRule(field.Type, fmt.Sprintf("%s_%s", ruleName, fieldName), rules)
 		fields = append(fields, fmt.Sprintf(`"%s" ":" ws %s`, fieldName, fieldRule))
 	}
-	
+
 	if len(fields) == 0 {
 		return `"{" ws "}"`
 	}
-	
+
 	// Generate object rule with optional trailing comma
 	objectFields := strings.Join(fields, ` ws "," ws `)
 	return fmt.Sprintf(`"{" ws (%s)? ws "}"`, objectFields)
@@ -88,7 +88,7 @@ func (g *GBNFGenerator) generateFieldRule(fieldType reflect.Type, ruleName strin
 	if fieldType.Kind() == reflect.Ptr {
 		fieldType = fieldType.Elem()
 	}
-	
+
 	switch fieldType.Kind() {
 	case reflect.String:
 		return "string"

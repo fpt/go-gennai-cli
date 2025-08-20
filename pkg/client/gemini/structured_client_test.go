@@ -17,7 +17,7 @@ type TestResponse struct {
 }
 
 type TestNestedResponse struct {
-	Data    TestResponse `json:"data" jsonschema:"required"`
+	Data     TestResponse      `json:"data" jsonschema:"required"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 

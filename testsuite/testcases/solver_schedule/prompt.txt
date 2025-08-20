@@ -1,4 +1,4 @@
-I need to use the CSP solver tool to solve a constraint satisfaction problem. Please use the solve_csp tool for this scheduling optimization problem:
+I need help solving a scheduling optimization problem. Can you help me schedule people to time slots with specific constraints?
 
 Problem: Schedule 4 people (Alice, Bob, Carol, David) to 4 time slots (9am, 10am, 11am, 12pm) with the following constraints:
 - Each person gets exactly one time slot
@@ -7,12 +7,9 @@ Problem: Schedule 4 people (Alice, Bob, Carol, David) to 4 time slots (9am, 10am
 - Bob must be scheduled before Carol (Bob's slot < Carol's slot)
 - David must be scheduled at either 11am or 12pm
 
-Requirements:
-- Use the solve_csp tool to find a valid assignment
-- Model this as variables A, B, C, D representing Alice, Bob, Carol, David
-- Use domain [1,2,3,4] where 1=9am, 2=10am, 3=11am, 4=12pm
-- Include all the constraints listed above
-- Show the solution with both the numeric values and the time slot names
-- Explain why the solution satisfies all constraints
+I need to:
+- Find a valid assignment that satisfies all constraints
+- See the solution with both numeric values and time slot names
+- Understand why the solution satisfies all constraints
 
 Expected result: A valid schedule that assigns each person to a unique time slot while satisfying all constraints.

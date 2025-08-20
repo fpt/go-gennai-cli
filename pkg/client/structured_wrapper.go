@@ -14,20 +14,20 @@ import (
 // ToolCallingStructuredClient implements StructuredLLM using tool calling with a "respond" tool
 // This works with any ToolCallingLLM (Anthropic, OpenAI, Ollama gpt-oss, etc.)
 type ToolCallingStructuredClient[T any] struct {
-	client           domain.ToolCallingLLM
-	generator        *jsonschema.Reflector
-	originalManager  domain.ToolManager // Store original tool manager
-	schema           T // Zero value for type inference
+	client          domain.ToolCallingLLM
+	generator       *jsonschema.Reflector
+	originalManager domain.ToolManager // Store original tool manager
+	schema          T                  // Zero value for type inference
 }
 
 // NewToolCallingStructuredClient creates a structured client using tool calling
 func NewToolCallingStructuredClient[T any](client domain.ToolCallingLLM) *ToolCallingStructuredClient[T] {
 	reflector := &jsonschema.Reflector{
-		AllowAdditionalProperties: false,
+		AllowAdditionalProperties:  false,
 		RequiredFromJSONSchemaTags: true,
-		DoNotReference: true,
+		DoNotReference:             true,
 	}
-	
+
 	return &ToolCallingStructuredClient[T]{
 		client:    client,
 		generator: reflector,
@@ -41,56 +41,56 @@ func (c *ToolCallingStructuredClient[T]) Chat(ctx context.Context, messages []me
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Marshal the structured result to JSON
 	jsonBytes, err := json.Marshal(result)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal structured response: %w", err)
 	}
-	
+
 	return message.NewChatMessage(message.MessageTypeAssistant, string(jsonBytes)), nil
 }
 
 // ChatWithStructure implements StructuredLLM interface using tool calling
 func (c *ToolCallingStructuredClient[T]) ChatWithStructure(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (T, error) {
 	var zero T
-	
+
 	// Get the type of T for schema generation
 	structType := reflect.TypeOf(zero)
-	
+
 	// Generate JSON Schema for the target type
 	schema := c.generator.ReflectFromType(structType)
-	
+
 	// Create a "respond" tool that uses the target schema as parameters
 	respondTool := c.createRespondTool(schema)
-	
+
 	// Create a temporary tool manager with just the respond tool
 	tempToolManager := &respondToolManager{
 		respondTool: respondTool,
 	}
-	
+
 	// Set the tool manager on the client (no need to get original since we don't have access)
 	c.client.SetToolManager(tempToolManager)
-	
+
 	// Add instruction to use the respond tool
 	enhancedMessages := append([]message.Message{
 		message.NewSystemMessage(
-			"You must respond using the 'respond' tool with the exact structure specified. "+
-			"Do not provide any other response format. The tool parameters define the required response structure."),
+			"You must respond using the 'respond' tool with the exact structure specified. " +
+				"Do not provide any other response format. The tool parameters define the required response structure."),
 	}, messages...)
-	
+
 	// Force tool choice to use the respond tool
 	toolChoice := domain.ToolChoice{
 		Type: domain.ToolChoiceTool,
 		Name: "respond",
 	}
-	
+
 	// Call the LLM with forced tool choice
 	response, err := c.client.ChatWithToolChoice(ctx, enhancedMessages, toolChoice, enableThinking, thinkingChan)
 	if err != nil {
 		return zero, fmt.Errorf("tool calling failed: %w", err)
 	}
-	
+
 	// Extract tool call result
 	if toolCallMsg, ok := response.(*message.ToolCallMessage); ok {
 		// Parse the tool arguments as our target type
@@ -99,13 +99,13 @@ func (c *ToolCallingStructuredClient[T]) ChatWithStructure(ctx context.Context, 
 		if err != nil {
 			return zero, fmt.Errorf("failed to marshal tool arguments: %w", err)
 		}
-		
+
 		if err := json.Unmarshal(argsJSON, &result); err != nil {
 			return zero, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
 		}
 		return result, nil
 	}
-	
+
 	return zero, fmt.Errorf("expected tool call response, got %T", response)
 }
 
@@ -126,12 +126,12 @@ func (c *ToolCallingStructuredClient[T]) IsVisionCapable() bool {
 func (c *ToolCallingStructuredClient[T]) createRespondTool(schema *jsonschema.Schema) *respondTool {
 	// Convert jsonschema.Schema to tool arguments
 	var toolArgs []message.ToolArgument
-	
+
 	if schema.Properties != nil {
 		for pair := schema.Properties.Oldest(); pair != nil; pair = pair.Next() {
 			propName := pair.Key
 			propSchema := pair.Value
-			
+
 			arg := message.ToolArgument{
 				Name:        message.ToolName(propName),
 				Type:        c.schemaTypeToString(propSchema),
@@ -141,7 +141,7 @@ func (c *ToolCallingStructuredClient[T]) createRespondTool(schema *jsonschema.Sc
 			toolArgs = append(toolArgs, arg)
 		}
 	}
-	
+
 	return &respondTool{
 		name:        "respond",
 		description: "Provide a structured response with the exact format specified",

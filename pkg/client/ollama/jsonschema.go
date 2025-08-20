@@ -23,7 +23,7 @@ func NewJSONSchemaGenerator() *JSONSchemaGenerator {
 		// Expand all references inline for Ollama compatibility
 		DoNotReference: true,
 	}
-	
+
 	return &JSONSchemaGenerator{
 		reflector: reflector,
 	}
@@ -35,20 +35,20 @@ func (g *JSONSchemaGenerator) GenerateSchema(structType reflect.Type) (json.RawM
 	if structType.Kind() == reflect.Ptr {
 		structType = structType.Elem()
 	}
-	
+
 	if structType.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("expected struct type, got %v", structType.Kind())
 	}
-	
+
 	// Generate the schema using the reflector
 	schema := g.reflector.ReflectFromType(structType)
-	
+
 	// Marshal to JSON
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal JSON schema: %w", err)
 	}
-	
+
 	return json.RawMessage(schemaBytes), nil
 }
 

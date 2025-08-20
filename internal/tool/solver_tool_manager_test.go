@@ -11,8 +11,17 @@ func TestSolverToolManager_GetTools(t *testing.T) {
 	manager := NewSolverToolManager()
 	tools := manager.GetTools()
 
-	if len(tools) != 1 {
-		t.Errorf("Expected 1 tool, got %d", len(tools))
+	expectedTools := 3 // solve_csp, solve_shortest_path, solve_topological_sort
+	if len(tools) != expectedTools {
+		t.Errorf("Expected %d tools, got %d", expectedTools, len(tools))
+	}
+
+	// Test that all expected tools exist
+	expectedToolNames := []string{"solve_csp", "solve_shortest_path", "solve_topological_sort"}
+	for _, toolName := range expectedToolNames {
+		if _, exists := tools[message.ToolName(toolName)]; !exists {
+			t.Errorf("Expected %s tool to exist", toolName)
+		}
 	}
 
 	// Test that the solve_csp tool exists
@@ -39,7 +48,7 @@ func TestSolverToolManager_GetTools(t *testing.T) {
 	hasConstraints := false
 	hasArcConsistency := false
 	hasTimeout := false
-	
+
 	for _, arg := range args {
 		switch arg.Name {
 		case "variables":
@@ -85,10 +94,10 @@ func TestSolverToolManager_CallTool(t *testing.T) {
 
 	// Test successful call
 	args := message.ToolArgumentValues{
-		"variables":            `{"X":[1,2,3], "Y":[1,2,3]}`,
-		"constraints":          `["X != Y"]`,
-		"use_arc_consistency":  true,
-		"timeout_seconds":      10.0,
+		"variables":           `{"X":[1,2,3], "Y":[1,2,3]}`,
+		"constraints":         `["X != Y"]`,
+		"use_arc_consistency": true,
+		"timeout_seconds":     10.0,
 	}
 
 	result, err := manager.CallTool(ctx, "solve_csp", args)
@@ -134,11 +143,15 @@ func TestSolverToolManager_ToolCount(t *testing.T) {
 	manager := NewSolverToolManager()
 	tools := manager.GetTools()
 
-	if len(tools) != 1 {
-		t.Errorf("Expected 1 tool, got %d", len(tools))
+	expectedTools := 3 // solve_csp, solve_shortest_path, solve_topological_sort
+	if len(tools) != expectedTools {
+		t.Errorf("Expected %d tools, got %d", expectedTools, len(tools))
 	}
 
-	if _, exists := tools["solve_csp"]; !exists {
-		t.Error("Expected solve_csp tool in tools map")
+	expectedToolNames := []string{"solve_csp", "solve_shortest_path", "solve_topological_sort"}
+	for _, toolName := range expectedToolNames {
+		if _, exists := tools[message.ToolName(toolName)]; !exists {
+			t.Errorf("Expected %s tool in tools map", toolName)
+		}
 	}
 }
