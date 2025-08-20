@@ -14,6 +14,7 @@ require (
 	github.com/ollama/ollama v0.9.6
 	github.com/openai/openai-go/v2 v2.0.2
 	github.com/pkg/errors v0.9.1
+	gonum.org/v1/gonum v0.16.0
 	google.golang.org/genai v1.19.0
 	gopkg.in/yaml.v3 v3.0.1
 )

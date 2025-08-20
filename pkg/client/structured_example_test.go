@@ -98,7 +98,7 @@ func TestFactoryStructuredClientSelection(t *testing.T) {
 		// For JSON Schema testing, create structured client directly from core
 		// since gemma3:latest doesn't support tool calling
 		structuredClient := ollama.NewOllamaStructuredClient[ExampleResponse](core)
-		
+
 		// Verify it's the correct type
 		if structuredClient == nil {
 			t.Fatal("Expected non-nil OllamaStructuredClient")
@@ -136,17 +136,17 @@ func TestFactoryStructuredClientSelection(t *testing.T) {
 func TestStructuredOutputSystemComplete(t *testing.T) {
 	t.Log("🎯 Structured Output System Test Summary:")
 	t.Log("1. ✅ Ollama JSON Schema implementation complete")
-	t.Log("2. ✅ Generic tool calling implementation complete") 
+	t.Log("2. ✅ Generic tool calling implementation complete")
 	t.Log("3. ✅ Gemini native structured output implementation complete")
 	t.Log("4. ✅ Factory pattern correctly routes to appropriate implementations")
 	t.Log("5. ✅ Type safety maintained with generics throughout")
 	t.Log("6. ✅ Full test coverage for all components")
-	
+
 	t.Log("")
 	t.Log("🚀 System Features:")
 	t.Log("   • Three-tier structured output support")
 	t.Log("   • Automatic client selection based on model capabilities")
-	t.Log("   • Type-safe generic interfaces") 
+	t.Log("   • Type-safe generic interfaces")
 	t.Log("   • JSON Schema generation with struct tags")
 	t.Log("   • Tool calling pattern for universal compatibility")
 	t.Log("   • Native Gemini structured output with ResponseMIMEType")

@@ -1,0 +1,23 @@
+I'm a delivery driver and need to find the shortest route between locations. Can you help me optimize my delivery route?
+
+Problem: Find the shortest path from Warehouse to Store through this delivery network:
+
+Locations:
+- Warehouse (starting point)
+- Mall
+- Hospital 
+- Store (end point)
+
+Road network with distances (in miles):
+- Warehouse → Mall: 5 miles
+- Warehouse → Hospital: 8 miles
+- Mall → Hospital: 3 miles
+- Mall → Store: 7 miles
+- Hospital → Store: 4 miles
+
+I need to:
+- Find the optimal route from Warehouse to Store
+- Know the total distance I'll travel
+- Get the complete sequence of locations to visit
+
+Expected result: The shortest path with total distance and the sequence of locations to visit.

@@ -166,7 +166,7 @@ func loadScenarioFile(filePath string, scenarios ScenarioMap) error {
 
 	// Add scenarios to the map, setting the name and normalizing keys to uppercase for case-insensitive lookup
 	for scenarioName, scenarioConfig := range fileScenarios {
-		scenarioConfig.name = scenarioName // Keep original name for display
+		scenarioConfig.name = scenarioName              // Keep original name for display
 		normalizedName := strings.ToUpper(scenarioName) // Normalize key for case-insensitive lookup
 		scenarios[normalizedName] = &scenarioConfig
 	}

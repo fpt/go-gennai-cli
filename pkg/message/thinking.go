@@ -51,7 +51,7 @@ func (tp *ThinkingPrinter) StartListening() {
 				fmt.Print("\x1b[90m💭 ") // Gray thinking emoji
 				tp.started = true
 			}
-			
+
 			// Print content in gray without reset
 			fmt.Printf("\x1b[90m%s", content)
 			os.Stdout.Sync()
@@ -63,13 +63,13 @@ func (tp *ThinkingPrinter) StartListening() {
 // Returns the send-only channel for clients to use
 func CreateThinkingChannel() chan<- string {
 	thinkingChan := make(chan string, 100) // Buffered to prevent blocking
-	
+
 	// Start printer goroutine
 	go func() {
 		printer := NewThinkingPrinter(thinkingChan)
 		printer.StartListening()
 	}()
-	
+
 	return thinkingChan
 }
 
