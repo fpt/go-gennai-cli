@@ -10,4 +10,10 @@ My constraints are:
 - The total cost must be exactly $19 (I want to save $6 from my $25 budget)
 - I need exactly 3 different items
 
-Can you help me figure out what combination of items I should buy?
+Can you help me figure out what combination of items I should buy? Please provide your final answer as a clear shopping list format like:
+
+**Shopping List:**
+- Item 1 ($price)
+- Item 2 ($price)
+- Item 3 ($price)
+**Total: $19**

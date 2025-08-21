@@ -425,7 +425,10 @@ func (m *FileSystemToolManager) handleWriteFile(ctx context.Context, args messag
 	// Update read timestamp after successful write to allow sequential edits
 	m.recordFileRead(path)
 
-	return message.NewToolResultText(fmt.Sprintf("Successfully wrote to %s", path)), nil
+	// Run auto-validation based on file type
+	validationResult := m.autoValidateFile(ctx, path)
+
+	return message.NewToolResultText(fmt.Sprintf("Successfully wrote to %s%s", path, validationResult)), nil
 }
 
 func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
@@ -537,8 +540,11 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 		occurrenceInfo = "Replaced 1 occurrence"
 	}
 
-	return message.NewToolResultText(fmt.Sprintf("Successfully edited %s\n%s\nReplaced %d line(s) with %d line(s)\nOld content: %d characters\nNew content: %d characters",
-		absPath, occurrenceInfo, oldLines, newLines, len(oldString), len(newString))), nil
+	// Run auto-validation based on file type
+	validationResult := m.autoValidateFile(ctx, absPath)
+
+	return message.NewToolResultText(fmt.Sprintf("Successfully edited %s\n%s\nReplaced %d line(s) with %d line(s)\nOld content: %d characters\nNew content: %d characters%s",
+		absPath, occurrenceInfo, oldLines, newLines, len(oldString), len(newString), validationResult)), nil
 }
 
 func (m *FileSystemToolManager) handleListDirectory(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
@@ -678,4 +684,168 @@ func (m *FileSystemToolManager) handleFindFile(ctx context.Context, args message
 	}
 
 	return message.NewToolResultText(outputStr), nil
+}
+
+// ValidationResult represents the result of a Go validation check
+type ValidationResult struct {
+	Check   string `json:"check"`
+	Status  string `json:"status"` // "pass", "fail", "error"
+	Output  string `json:"output,omitempty"`
+	Summary string `json:"summary"`
+}
+
+// autoValidateFile performs automatic validation after write/edit operations based on file type
+func (m *FileSystemToolManager) autoValidateFile(ctx context.Context, filePath string) string {
+	// Get file extension
+	ext := strings.ToLower(filepath.Ext(filePath))
+	
+	switch ext {
+	case ".go":
+		return m.autoValidateGoFile(ctx, filePath)
+	default:
+		// No validation available for this file type
+		return ""
+	}
+}
+
+// autoValidateGoFile performs automatic Go validation after write/edit operations
+func (m *FileSystemToolManager) autoValidateGoFile(ctx context.Context, filePath string) string {
+	// Find the directory containing go files
+	dir := filepath.Dir(filePath)
+	fileName := filepath.Base(filePath)
+	
+	// Check if this looks like a Go project (has .go files)
+	hasGoFiles, err := m.hasGoFilesInDirectory(dir)
+	if err != nil || !hasGoFiles {
+		return ""
+	}
+
+	results := []ValidationResult{}
+	
+	// Run go vet on the specific file
+	vetResult := m.runGoVet(ctx, dir, fileName)
+	results = append(results, vetResult)
+	
+	// Run go build -n (dry run) on the specific file
+	buildResult := m.runGoBuild(ctx, dir, fileName)
+	results = append(results, buildResult)
+	
+	// Format validation results
+	return m.formatValidationResults(results)
+}
+
+// hasGoFilesInDirectory checks if directory contains .go files
+func (m *FileSystemToolManager) hasGoFilesInDirectory(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// runGoVet executes go vet and returns the result
+func (m *FileSystemToolManager) runGoVet(ctx context.Context, dir string, fileName string) ValidationResult {
+	result := ValidationResult{
+		Check: "go vet - Static analysis to find suspicious constructs",
+	}
+	
+	// Validate the specific file that was written/edited
+	cmd := exec.CommandContext(ctx, "go", "vet", fileName)
+	cmd.Dir = dir
+	
+	output, err := cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(output))
+	
+	if err != nil {
+		if outputStr != "" {
+			result.Status = "fail"
+			result.Output = outputStr
+			lines := strings.Split(outputStr, "\n")
+			result.Summary = fmt.Sprintf("Found %d vet issues", len(lines))
+		} else {
+			result.Status = "error"
+			result.Output = err.Error()
+			result.Summary = fmt.Sprintf("Could not run go vet: %v", err)
+		}
+	} else {
+		result.Status = "pass"
+		result.Summary = "No vet issues found"
+	}
+	
+	return result
+}
+
+// runGoBuild executes go build -n (dry run) and returns the result
+func (m *FileSystemToolManager) runGoBuild(ctx context.Context, dir string, fileName string) ValidationResult {
+	result := ValidationResult{
+		Check: "go build -n - Check if code compiles without building",
+	}
+	
+	// Validate the specific file that was written/edited
+	cmd := exec.CommandContext(ctx, "go", "build", "-n", fileName)
+	cmd.Dir = dir
+	
+	output, err := cmd.CombinedOutput()
+	outputStr := strings.TrimSpace(string(output))
+	
+	if err != nil {
+		result.Status = "fail"
+		result.Output = outputStr
+		result.Summary = "Build would fail - compilation errors found"
+	} else {
+		result.Status = "pass"
+		result.Summary = "Code compiles successfully"
+	}
+	
+	return result
+}
+
+// formatValidationResults formats validation results into a readable string
+func (m *FileSystemToolManager) formatValidationResults(results []ValidationResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	
+	var output strings.Builder
+	output.WriteString("\n\n🔍 **Go Validation Results:**\n")
+	
+	passed := 0
+	failed := 0
+	
+	for _, result := range results {
+		switch result.Status {
+		case "pass":
+			output.WriteString(fmt.Sprintf("✅ %s: %s\n", result.Check, result.Summary))
+			passed++
+		case "fail":
+			output.WriteString(fmt.Sprintf("❌ %s: %s\n", result.Check, result.Summary))
+			if result.Output != "" {
+				// Limit output to prevent overwhelming response
+				lines := strings.Split(result.Output, "\n")
+				if len(lines) > 5 {
+					output.WriteString(fmt.Sprintf("```\n%s\n... (%d more lines)\n```\n", 
+						strings.Join(lines[:5], "\n"), len(lines)-5))
+				} else {
+					output.WriteString(fmt.Sprintf("```\n%s\n```\n", result.Output))
+				}
+			}
+			failed++
+		case "error":
+			output.WriteString(fmt.Sprintf("⚠️  %s: %s\n", result.Check, result.Summary))
+		}
+	}
+	
+	if failed == 0 {
+		output.WriteString(fmt.Sprintf("\n🎉 All %d validation checks passed!\n", passed))
+	} else {
+		output.WriteString(fmt.Sprintf("\n📊 Validation Summary: %d passed, %d failed\n", passed, failed))
+	}
+	
+	return output.String()
 }

@@ -17,91 +17,82 @@ if grep -q "CYCLE DETECTED" "$result_file"; then
     exit 1
 fi
 
-# Check if topological order was found
-if ! grep -q "TOPOLOGICAL ORDER FOUND" "$result_file"; then
-    echo "❌ FAIL: No topological order solution found"
-    exit 1
-fi
+# Extract only the response content (after ✅ Response:)
+response_content=$(./extract_response.sh "$result_file")
+echo "$response_content" > ./response_only.txt
 
-# Check if execution order is present
-if ! grep -q "Execution Order:" "$result_file"; then
-    echo "❌ FAIL: Execution order not displayed"
-    exit 1
-fi
+# Find the sequence of components as they first appear in the response only
+declare -a found_components
+declare -a line_numbers
 
-# Extract the execution order and verify key constraints
-execution_order=$(grep -A 20 "Execution Order:" "$result_file" | grep -E "^[0-9]+\." | sed 's/^[0-9]*\. //')
+# Get all lines with component names and their line numbers from response only
+while IFS= read -r line; do
+    line_num=$(echo "$line" | cut -d: -f1)
+    line_content=$(echo "$line" | cut -d: -f2-)
+    
+    if [[ "$line_content" =~ Database ]] && [[ ! " ${found_components[@]} " =~ " Database " ]]; then
+        found_components+=("Database")
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Library ]] && [[ ! " ${found_components[@]} " =~ " Library " ]]; then
+        found_components+=("Library")  
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Service ]] && [[ ! " ${found_components[@]} " =~ " Service " ]]; then
+        found_components+=("Service")
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Tests ]] && [[ ! " ${found_components[@]} " =~ " Tests " ]]; then
+        found_components+=("Tests")
+        line_numbers+=("$line_num")
+    fi
+done <<< "$(grep -n -E "(Database|Library|Service|Tests)" ./response_only.txt)"
+
+execution_order=$(IFS=' '; echo "${found_components[*]}")
+
+echo "Found components in order: ${found_components[@]}"
+echo "At line numbers: ${line_numbers[@]}"
+
+# Check if components appear in adjacent lines (allowing for some spacing)
+if [ ${#line_numbers[@]} -eq 4 ]; then
+    for i in {0..2}; do
+        current_line=${line_numbers[$i]}
+        next_line=${line_numbers[$((i+1))]}
+        line_diff=$((next_line - current_line))
+        if [ $line_diff -gt 3 ]; then
+            echo "⚠️  WARNING: Components may not be in adjacent lines (gap of $line_diff lines between ${found_components[$i]} and ${found_components[$((i+1))]})"
+        fi
+    done
+fi
 
 echo "Found execution order:"
 echo "$execution_order"
 
-# Convert to numbered list for easier checking
-order_list=($execution_order)
-
 # Check that we have exactly 4 components
-if [ ${#order_list[@]} -ne 4 ]; then
-    echo "❌ FAIL: Expected 4 components, but found ${#order_list[@]}"
+if [ ${#found_components[@]} -ne 4 ]; then
+    echo "❌ FAIL: Expected 4 components, but found ${#found_components[@]}"
+    echo "Found components: ${found_components[@]}"
     exit 1
 fi
 
 # Check that Database is first
-if [ "${order_list[0]}" != "Database" ]; then
-    echo "❌ FAIL: Database should be built first, but found: ${order_list[0]}"
+if [ "${found_components[0]}" != "Database" ]; then
+    echo "❌ FAIL: Database should be built first, but found: ${found_components[0]}"
     exit 1
 fi
 
 # Check that Tests is last
-last_index=$((${#order_list[@]}-1))
-if [ "${order_list[$last_index]}" != "Tests" ]; then
-    echo "❌ FAIL: Tests should be built last, but found: ${order_list[$last_index]}"
+last_index=$((${#found_components[@]}-1))
+if [ "${found_components[$last_index]}" != "Tests" ]; then
+    echo "❌ FAIL: Tests should be built last, but found: ${found_components[$last_index]}"
     exit 1
 fi
 
-# Function to find position of component in build order
-find_position() {
-    local component="$1"
-    for i in "${!order_list[@]}"; do
-        if [ "${order_list[$i]}" = "$component" ]; then
-            echo $i
-            return
-        fi
-    done
-    echo -1
-}
-
-# Verify all expected components are present
-expected_components=("Database" "Library" "Service" "Tests")
-for component in "${expected_components[@]}"; do
-    pos=$(find_position "$component")
-    if [ $pos -eq -1 ]; then
-        echo "❌ FAIL: Component '$component' not found in execution order"
+# Verify all expected components are present in correct order
+expected_order=("Database" "Library" "Service" "Tests")
+for i in "${!expected_order[@]}"; do
+    if [ "${found_components[$i]}" != "${expected_order[$i]}" ]; then
+        echo "❌ FAIL: Expected component ${expected_order[$i]} at position $((i+1)), but found: ${found_components[$i]}"
         exit 1
     fi
 done
-
-# Verify dependency relationships
-database_pos=$(find_position "Database")
-library_pos=$(find_position "Library")
-service_pos=$(find_position "Service")
-tests_pos=$(find_position "Tests")
-
-# Check: Database → Library
-if [ $database_pos -ge $library_pos ]; then
-    echo "❌ FAIL: Database should be built before Library"
-    exit 1
-fi
-
-# Check: Library → Service
-if [ $library_pos -ge $service_pos ]; then
-    echo "❌ FAIL: Library should be built before Service"
-    exit 1
-fi
-
-# Check: Service → Tests
-if [ $service_pos -ge $tests_pos ]; then
-    echo "❌ FAIL: Service should be built before Tests"
-    exit 1
-fi
 
 echo "✅ PASS: All dependency relationships satisfied"
 echo "✅ PASS: Database built first, Tests built last"

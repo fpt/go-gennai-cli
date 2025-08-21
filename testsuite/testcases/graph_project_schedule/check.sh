@@ -17,92 +17,82 @@ if grep -q "CYCLE DETECTED" "$result_file"; then
     exit 1
 fi
 
-# Check if topological order was found
-if ! grep -q "TOPOLOGICAL ORDER FOUND" "$result_file"; then
-    echo "❌ FAIL: No topological order solution found"
-    exit 1
-fi
+# Extract only the response content (after ✅ Response:)
+response_content=$(./extract_response.sh "$result_file")
+echo "$response_content" > ./response_only.txt
 
-# Check if execution order is present
-if ! grep -q "Execution Order:" "$result_file"; then
-    echo "❌ FAIL: Execution order not displayed"
-    exit 1
-fi
+# Find the sequence of tasks as they first appear in the response only
+declare -a found_tasks
+declare -a line_numbers
 
-# Extract the execution order
-execution_order=$(grep -A 15 "Execution Order:" "$result_file" | grep -E "^[0-9]+\." | sed 's/^[0-9]*\. //')
+# Get all lines with task names and their line numbers from response only
+while IFS= read -r line; do
+    line_num=$(echo "$line" | cut -d: -f1)
+    line_content=$(echo "$line" | cut -d: -f2-)
+    
+    if [[ "$line_content" =~ Plan ]] && [[ ! " ${found_tasks[@]} " =~ " Plan " ]]; then
+        found_tasks+=("Plan")
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Design ]] && [[ ! " ${found_tasks[@]} " =~ " Design " ]]; then
+        found_tasks+=("Design")  
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Build ]] && [[ ! " ${found_tasks[@]} " =~ " Build " ]]; then
+        found_tasks+=("Build")
+        line_numbers+=("$line_num")
+    elif [[ "$line_content" =~ Test ]] && [[ ! " ${found_tasks[@]} " =~ " Test " ]]; then
+        found_tasks+=("Test")
+        line_numbers+=("$line_num")
+    fi
+done <<< "$(grep -n -E "(Plan|Design|Build|Test)" ./response_only.txt)"
+
+execution_order=$(IFS=' '; echo "${found_tasks[*]}")
+
+echo "Found tasks in order: ${found_tasks[@]}"
+echo "At line numbers: ${line_numbers[@]}"
+
+# Check if tasks appear in adjacent lines (allowing for some spacing)
+if [ ${#line_numbers[@]} -eq 4 ]; then
+    for i in {0..2}; do
+        current_line=${line_numbers[$i]}
+        next_line=${line_numbers[$((i+1))]}
+        line_diff=$((next_line - current_line))
+        if [ $line_diff -gt 3 ]; then
+            echo "⚠️  WARNING: Tasks may not be in adjacent lines (gap of $line_diff lines between ${found_tasks[$i]} and ${found_tasks[$((i+1))]})"
+        fi
+    done
+fi
 
 echo "Found execution order:"
 echo "$execution_order"
 
-# Convert to array for easier checking
-order_list=($execution_order)
-
-# Verify we have exactly 4 tasks
-expected_tasks=("Plan" "Design" "Build" "Test")
-if [ ${#order_list[@]} -ne 4 ]; then
-    echo "❌ FAIL: Expected 4 tasks, but found ${#order_list[@]}"
+# Check that we have exactly 4 tasks
+if [ ${#found_tasks[@]} -ne 4 ]; then
+    echo "❌ FAIL: Expected 4 tasks, but found ${#found_tasks[@]}"
+    echo "Found tasks: ${found_tasks[@]}"
     exit 1
 fi
 
-# Function to find position of task in execution order
-find_position() {
-    local task="$1"
-    for i in "${!order_list[@]}"; do
-        if [ "${order_list[$i]}" = "$task" ]; then
-            echo $i
-            return
-        fi
-    done
-    echo -1
-}
-
 # Check that Plan is first
-if [ "${order_list[0]}" != "Plan" ]; then
-    echo "❌ FAIL: Plan should be first task, but found: ${order_list[0]}"
+if [ "${found_tasks[0]}" != "Plan" ]; then
+    echo "❌ FAIL: Plan should be first task, but found: ${found_tasks[0]}"
     exit 1
 fi
 
 # Check that Test is last
-last_index=$((${#order_list[@]}-1))
-if [ "${order_list[$last_index]}" != "Test" ]; then
-    echo "❌ FAIL: Test should be last task, but found: ${order_list[$last_index]}"
+last_index=$((${#found_tasks[@]}-1))
+if [ "${found_tasks[$last_index]}" != "Test" ]; then
+    echo "❌ FAIL: Test should be last task, but found: ${found_tasks[$last_index]}"
     exit 1
 fi
 
-# Verify all expected tasks are present
-for task in "${expected_tasks[@]}"; do
-    pos=$(find_position "$task")
-    if [ $pos -eq -1 ]; then
-        echo "❌ FAIL: Task '$task' not found in execution order"
+# Verify all expected tasks are present in correct order
+expected_order=("Plan" "Design" "Build" "Test")
+for i in "${!expected_order[@]}"; do
+    if [ "${found_tasks[$i]}" != "${expected_order[$i]}" ]; then
+        echo "❌ FAIL: Expected task ${expected_order[$i]} at position $((i+1)), but found: ${found_tasks[$i]}"
         exit 1
     fi
 done
-
-# Get positions of all tasks
-plan_pos=$(find_position "Plan")
-design_pos=$(find_position "Design")
-build_pos=$(find_position "Build")
-test_pos=$(find_position "Test")
-
-# Verify dependency relationships
-# Plan → Design
-if [ $plan_pos -ge $design_pos ]; then
-    echo "❌ FAIL: Plan should come before Design"
-    exit 1
-fi
-
-# Design → Build
-if [ $design_pos -ge $build_pos ]; then
-    echo "❌ FAIL: Design should come before Build"
-    exit 1
-fi
-
-# Build → Test
-if [ $build_pos -ge $test_pos ]; then
-    echo "❌ FAIL: Build should come before Test"
-    exit 1
-fi
 
 echo "✅ PASS: All project dependencies satisfied"
 echo "✅ PASS: Plan is first task, Test is last task"

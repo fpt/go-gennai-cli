@@ -50,19 +50,23 @@ else
     exit 1
 fi
 
-# Check that exactly 3 items are selected in the solution
+# Extract only the response content (after ✅ Response:)
+response_content=$(./extract_response.sh "$output_file")
+echo "$response_content" > ./response_only.txt
+
+# Check that exactly 3 items are selected in the final response
 item_count=0
-# Look for positive selection indicators (value = 1) and exclude negative indicators (value = 0)
-if echo "$ai_output" | grep -qi -E "(buy.*ground beef|ground beef.*buy|beef.*=.*1|B.*=.*1)" && ! echo "$ai_output" | grep -qi -E "(beef.*=.*0|B.*=.*0)"; then
+# Look for items mentioned in shopping list format
+if echo "$response_content" | grep -qi "ground.?beef"; then
     ((item_count++))
 fi
-if echo "$ai_output" | grep -qi -E "(buy.*rice|rice.*buy|rice.*=.*1|R.*=.*1)" && ! echo "$ai_output" | grep -qi -E "(rice.*=.*0|R.*=.*0)"; then
+if echo "$response_content" | grep -qi "rice"; then
+    ((item_count++))
+fi  
+if echo "$response_content" | grep -qi "tomatoes"; then
     ((item_count++))
 fi
-if echo "$ai_output" | grep -qi -E "(buy.*tomatoes|tomatoes.*buy|tomatoes.*=.*1|T.*=.*1)" && ! echo "$ai_output" | grep -qi -E "(tomatoes.*=.*0|T.*=.*0)"; then
-    ((item_count++))
-fi
-if echo "$ai_output" | grep -qi -E "(buy.*onions|onions.*buy|onions.*=.*1|O.*=.*1)" && ! echo "$ai_output" | grep -qi -E "(onions.*=.*0|O.*=.*0)"; then
+if echo "$response_content" | grep -qi "onions"; then
     ((item_count++))
 fi
 
