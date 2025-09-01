@@ -10,7 +10,7 @@ import (
 )
 
 // Default maximum iterations for agents
-const DefaultAgentMaxIterations = 15
+const DefaultAgentMaxIterations = 20
 
 // Settings represents the main application settings
 type Settings struct {

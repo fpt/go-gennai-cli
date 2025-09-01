@@ -27,3 +27,6 @@ CODE:
     - Analysis/Debug: locate key files with Glob/Grep, Read with context, explain findings; batch inspections
     - Testing: add or run tests where appropriate and verify results; finalize after success
     - Refactoring: preserve behavior, improve structure
+
+    Project Guide (optional):
+    {{ @AGENTS.md }}

@@ -97,7 +97,7 @@ func (c *AnthropicClient) ModelID() string { return c.model }
 
 // ContextWindowProvider implementation
 func (c *AnthropicClient) MaxContextTokens() int {
-    return getModelContextWindow(c.model)
+	return getModelContextWindow(c.model)
 }
 
 // TokenUsageProvider implementation (populated from Message.Usage when available)
@@ -315,11 +315,9 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 			toolCall := toolCalls[0]
 			toolArgs := make(map[string]any)
 			if toolCall.Input != nil {
-				fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
 				if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
 					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
 				}
-				fmt.Printf("DEBUG: Parsed tool args: %v\n", toolArgs)
 			}
 			if finalThinking != "" && finalSignature != "" {
 				return message.NewToolCallMessageWithThinkingAndSignature(
@@ -346,11 +344,9 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 		for _, tc := range toolCalls {
 			args := make(map[string]any)
 			if tc.Input != nil {
-				fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", tc.Name, string(tc.Input))
 				if err := json.Unmarshal(tc.Input, &args); err != nil {
 					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
 				}
-				fmt.Printf("DEBUG: Parsed tool args: %v\n", args)
 			}
 			// No per-call thinking; preserve thinking at batch level via aligner/system as needed
 			calls = append(calls, message.NewToolCallMessage(

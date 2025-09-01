@@ -205,9 +205,39 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 		Reasoning: reasoning,
 	}
 
-	actionPrompt := s.createActionPrompt(userInput, actionResp)
+    // Prepare a stable system prompt (scenario header) and insert only when changed
+    // Render with empty userInput so the header remains stable across turns;
+    // include workingDir and reasoning so those parts remain accurate.
+    if scenarioConfig, exists := s.scenarios[actionResp.Action]; exists {
+        systemPrompt := scenarioConfig.RenderPrompt("", actionResp.Reasoning, s.workingDir)
+        if systemPrompt != "" {
+            // Use a discoverable marker so we can detect previous insertion
+            marker := fmt.Sprintf("[[SCENARIO_PROMPT:%s]]\n", actionResp.Action)
+            candidate := marker + systemPrompt
 
-	result, err := reactClient.Invoke(ctx, actionPrompt, thinkingChan)
+            // Find the most recent matching marker message
+            var lastMatched string
+            for _, msg := range s.sharedState.GetMessages() {
+                if msg.Type() == message.MessageTypeSystem && strings.HasPrefix(msg.Content(), marker) {
+                    lastMatched = msg.Content()
+                }
+            }
+
+            if lastMatched == "" || lastMatched != candidate {
+                s.sharedState.AddMessage(message.NewSystemMessage(candidate))
+            }
+        }
+    }
+
+    // Build the user-facing prompt content (raw request + current todos)
+    userPrompt := userInput
+    if s.todoToolManager != nil {
+        if todosContext := s.todoToolManager.GetTodosForPrompt(); todosContext != "" {
+            userPrompt = fmt.Sprintf("%s\n\n## Current Todos:\n%s\n\nUse TodoWrite tool to update todos as you progress.", userPrompt, todosContext)
+        }
+    }
+
+    result, err := reactClient.Invoke(ctx, userPrompt, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}

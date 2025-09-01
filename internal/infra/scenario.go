@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/internal/repository"
@@ -96,6 +97,32 @@ func (s *ScenarioConfig) RenderPrompt(userInput, scenarioReason, workingDir stri
 	prompt = strings.ReplaceAll(prompt, "{{userInput}}", userInput)
 	prompt = strings.ReplaceAll(prompt, "{{scenarioReason}}", scenarioReason)
 	prompt = strings.ReplaceAll(prompt, "{{workingDir}}", workingDir)
+
+	// Expand optional file includes of the form: {{ @ path/to/file }}
+	// - If the file exists, replace with its content
+	// - If not, remove the placeholder
+	includeRe := regexp.MustCompile(`\{\{\s*@([^}]+?)\s*\}\}`)
+	prompt = includeRe.ReplaceAllStringFunc(prompt, func(m string) string {
+		matches := includeRe.FindStringSubmatch(m)
+		if len(matches) < 2 {
+			return ""
+		}
+		rel := strings.TrimSpace(matches[1])
+		if rel == "" {
+			return ""
+		}
+		var fullPath string
+		if filepath.IsAbs(rel) {
+			fullPath = rel
+		} else {
+			fullPath = filepath.Join(workingDir, rel)
+		}
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return ""
+		}
+		return string(data)
+	})
 
 	return prompt
 }
