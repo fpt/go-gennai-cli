@@ -100,6 +100,18 @@ func IsModelInKnownList(model string) bool {
 	return false
 }
 
+// GetModelContextWindow returns the known context window for a model.
+// If the model isn't in the known list, returns 0 to indicate unknown.
+func GetModelContextWindow(model string) int {
+    modelLower := strings.ToLower(model)
+    for _, ollamaModel := range ollamaModels {
+        if strings.Contains(modelLower, strings.ToLower(ollamaModel.Name)) {
+            return ollamaModel.Context
+        }
+    }
+    return 0
+}
+
 // IsJSONSchemaCapableModel checks if a model supports JSON Schema format for structured output
 // JSON Schema is supported by most Ollama models that don't have native tool calling
 func IsJSONSchemaCapableModel(model string) bool {

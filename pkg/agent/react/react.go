@@ -110,19 +110,28 @@ func (r *ReAct) annotateAndLogUsage(resp message.Message) {
 		modelID = idProvider.ModelID()
 	}
 
-	// Get token usage if available
-	if usageProvider, ok := r.llmClient.(domain.TokenUsageProvider); ok {
-		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
-			// Attach to message for persistence in state
-			resp.SetTokenUsage(usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-			// Print concise usage summary
-			if modelID != "" {
-				fmt.Printf("📈 Tokens [%s]: in %d, out %d, total %d\n", modelID, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-			} else {
-				fmt.Printf("📈 Tokens: in %d, out %d, total %d\n", usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
-			}
-		}
-	}
+    // Get token usage if available
+    if usageProvider, ok := r.llmClient.(domain.TokenUsageProvider); ok {
+        if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+            // Attach to message for persistence in state
+            resp.SetTokenUsage(usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+            // Print concise usage summary
+            if modelID != "" {
+                fmt.Printf("📈 Tokens [%s]: in %d, out %d, total %d\n", modelID, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+            } else {
+                fmt.Printf("📈 Tokens: in %d, out %d, total %d\n", usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+            }
+
+            // If we also know the model's context window, show context utilization (input only)
+            if ctxWin, ok3 := r.llmClient.(domain.ContextWindowProvider); ok3 {
+                maxCtx := ctxWin.MaxContextTokens()
+                if maxCtx > 0 && usage.InputTokens > 0 {
+                    pct := float64(usage.InputTokens) / float64(maxCtx) * 100
+                    fmt.Printf("📦 Context: %d/%d (%.1f%%)\n", usage.InputTokens, maxCtx, pct)
+                }
+            }
+        }
+    }
 }
 
 // Invoke processes input using the configured maxIterations with external thinking channel

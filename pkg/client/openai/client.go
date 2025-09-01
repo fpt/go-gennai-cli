@@ -27,8 +27,8 @@ type OpenAICore struct {
 
 // OpenAIClient implements ToolCallingLLM and VisionLLM interfaces
 type OpenAIClient struct {
-	*OpenAICore
-	toolManager domain.ToolManager
+    *OpenAICore
+    toolManager domain.ToolManager
 
 	// Telemetry and caching/session hints
 	lastUsage message.TokenUsage
@@ -82,6 +82,16 @@ func NewOpenAIClientFromCore(core *OpenAICore) domain.ToolCallingLLM {
 
 // ModelIdentifier implementation
 func (c *OpenAIClient) ModelID() string { return c.model }
+
+// ContextWindowProvider implementation
+func (c *OpenAIClient) MaxContextTokens() int {
+    caps := getModelCapabilities(c.model)
+    if caps.MaxContextWindow > 0 {
+        return caps.MaxContextWindow
+    }
+    // Conservative fallback aligned with ReAct's estimate for OpenAI
+    return 128000
+}
 
 // TokenUsageProvider implementation (best-effort; populated when available)
 func (c *OpenAIClient) LastTokenUsage() (message.TokenUsage, bool) {
@@ -210,7 +220,6 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 		responseMessage = message.NewChatMessage(message.MessageTypeAssistant, outputText)
 	}
 
-	// TODO: Set token usage from response when available in API
 	// TODO: Handle tool calls when implementing tool support
 
 	return responseMessage, nil
@@ -348,7 +357,6 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 		}
 	}
 
-	// TODO: Set token usage from response when available in API
 	// TODO: Handle tool calls when implementing tool support
 
 	return responseMessage, nil
@@ -793,8 +801,6 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 			fmt.Printf("DEBUG: Tool calling - Creating message WITHOUT thinking content\n")
 		}
 	}
-
-	// TODO: Set token usage from response when available in API
 
 	return responseMessage, nil
 }

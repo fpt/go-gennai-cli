@@ -42,58 +42,65 @@ func isValidGeminiModel(model string) bool {
 
 // ModelCapabilities represents the capabilities of a Gemini model
 type ModelCapabilities struct {
-	SupportsVision       bool
-	SupportsToolCalling  bool
-	SupportsStructured   bool
-	MaxTokens            int
-	SupportsSystemPrompt bool
-	SupportsMultimodal   bool
-	IsReasoningModel     bool
+    SupportsVision       bool
+    SupportsToolCalling  bool
+    SupportsStructured   bool
+    MaxTokens            int
+    // MaxContextWindow is the approximate input context window size
+    // Gemini 2.5 models support ~1,048,576 token input contexts.
+    MaxContextWindow     int
+    SupportsSystemPrompt bool
+    SupportsMultimodal   bool
+    IsReasoningModel     bool
 }
 
 // getModelCapabilities returns the capabilities of a specific Gemini 2.5 model
 func getModelCapabilities(model string) ModelCapabilities {
 	switch model {
-	case modelGemini25Pro:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Audio, images, video, text, PDF
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
-		}
-	case modelGemini25Flash:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio (no PDF)
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
-		}
-	case modelGemini25FlashLite:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio, PDF
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding, URL context
-		}
-	default:
-		// Default to Flash Lite capabilities for unknown models
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio, PDF
-			IsReasoningModel:     true, // Thinking supported
-		}
-	}
+    case modelGemini25Pro:
+        return ModelCapabilities{
+            SupportsVision:       true,
+            SupportsToolCalling:  true,  // Function calling supported
+            SupportsStructured:   true,  // Structured output supported
+            MaxTokens:            65536,  // Output token limit: 65,536 (Input limit: 1,048,576)
+            MaxContextWindow:     1048576,
+            SupportsSystemPrompt: true,
+            SupportsMultimodal:   true, // Audio, images, video, text, PDF
+            IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
+        }
+    case modelGemini25Flash:
+        return ModelCapabilities{
+            SupportsVision:       true,
+            SupportsToolCalling:  true,  // Function calling supported
+            SupportsStructured:   true,  // Structured output supported
+            MaxTokens:            65536,  // Output token limit: 65,536 (Input limit: 1,048,576)
+            MaxContextWindow:     1048576,
+            SupportsSystemPrompt: true,
+            SupportsMultimodal:   true, // Text, images, video, audio (no PDF)
+            IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
+        }
+    case modelGemini25FlashLite:
+        return ModelCapabilities{
+            SupportsVision:       true,
+            SupportsToolCalling:  true,  // Function calling supported
+            SupportsStructured:   true,  // Structured output supported
+            MaxTokens:            65536,  // Output token limit: 65,536 (Input limit: 1,048,576)
+            MaxContextWindow:     1048576,
+            SupportsSystemPrompt: true,
+            SupportsMultimodal:   true, // Text, images, video, audio, PDF
+            IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding, URL context
+        }
+    default:
+        // Default to Flash Lite capabilities for unknown models
+        return ModelCapabilities{
+            SupportsVision:       true,
+            SupportsToolCalling:  true,  // Function calling supported
+            SupportsStructured:   true,  // Structured output supported
+            MaxTokens:            65536,  // Output token limit: 65,536 (Input limit: 1,048,576)
+            MaxContextWindow:     1048576,
+            SupportsSystemPrompt: true,
+            SupportsMultimodal:   true, // Text, images, video, audio, PDF
+            IsReasoningModel:     true, // Thinking supported
+        }
+    }
 }

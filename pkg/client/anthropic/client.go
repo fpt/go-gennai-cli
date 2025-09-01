@@ -95,6 +95,11 @@ func NewAnthropicClientFromCore(core *AnthropicCore) domain.ToolCallingLLM {
 // ModelIdentifier implementation
 func (c *AnthropicClient) ModelID() string { return c.model }
 
+// ContextWindowProvider implementation
+func (c *AnthropicClient) MaxContextTokens() int {
+    return getModelContextWindow(c.model)
+}
+
 // TokenUsageProvider implementation (populated from Message.Usage when available)
 func (c *AnthropicClient) LastTokenUsage() (message.TokenUsage, bool) {
 	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {

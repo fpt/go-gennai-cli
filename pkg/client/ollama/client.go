@@ -199,6 +199,11 @@ func (c *OllamaClient) SupportsVision() bool {
 // ModelIdentifier implementation
 func (c *OllamaClient) ModelID() string { return c.model }
 
+// ContextWindowProvider implementation
+func (c *OllamaClient) MaxContextTokens() int {
+    return GetModelContextWindow(c.model)
+}
+
 // TokenUsageProvider implementation
 func (c *OllamaClient) LastTokenUsage() (message.TokenUsage, bool) {
 	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {

@@ -48,6 +48,23 @@ func supportsThinking(model string) bool {
 	return true
 }
 
+// getModelContextWindow returns a conservative approximation of the
+// model's context window (input token capacity). Anthropic models
+// generally provide large windows (~200k). This value is used for
+// utilization reporting only.
+func getModelContextWindow(model string) int {
+    switch model {
+    case "claude-opus-4-20250514",
+        "claude-sonnet-4-20250514",
+        "claude-3-7-sonnet-latest",
+        "claude-3-5-haiku-latest":
+        return 200000
+    default:
+        // Conservative default for unknown/alias names
+        return 200000
+    }
+}
+
 // convertToolChoiceToAnthropic converts domain ToolChoice to Anthropic format
 func convertToolChoiceToAnthropic(toolChoice domain.ToolChoice) anthropic.ToolChoiceUnionParam {
 	switch toolChoice.Type {

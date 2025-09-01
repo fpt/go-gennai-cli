@@ -80,6 +80,16 @@ func NewGeminiClientFromCore(core *GeminiCore) *GeminiClient {
 // ModelIdentifier implementation
 func (c *GeminiClient) ModelID() string { return c.model }
 
+// ContextWindowProvider implementation
+func (c *GeminiClient) MaxContextTokens() int {
+    caps := getModelCapabilities(c.model)
+    if caps.MaxContextWindow > 0 {
+        return caps.MaxContextWindow
+    }
+    // Conservative default for Gemini 2.5 family
+    return 1048576
+}
+
 // TokenUsageProvider implementation
 func (c *GeminiClient) LastTokenUsage() (message.TokenUsage, bool) {
 	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
