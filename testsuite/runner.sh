@@ -14,11 +14,20 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Load environment variables from .env if present (project root)
+if [ -f ".env" ]; then
+    # Export variables defined in .env to child processes
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+fi
+
 # Check if CLI is set
 if [ -z "$CLI" ]; then
     echo "Error: CLI environment variable is not set"
     echo "Usage: CLI=path/to/gennai ./testsuite/runner.sh <testcase> <backend>"
-    echo "Example: CLI=output/gennai ./testsuite/runner.sh fibonacci_test ollama_gbnf"
+    echo "Example: CLI=output/gennai ./testsuite/runner.sh fibonacci anthropic"
     exit 1
 fi
 

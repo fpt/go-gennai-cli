@@ -29,6 +29,11 @@ type OpenAICore struct {
 type OpenAIClient struct {
 	*OpenAICore
 	toolManager domain.ToolManager
+
+	// Telemetry and caching/session hints
+	lastUsage message.TokenUsage
+	sessionID string
+	cacheOpts domain.ModelSideCacheOptions
 }
 
 // NewOpenAIClient creates a new OpenAI client with configurable maxTokens
@@ -73,6 +78,26 @@ func NewOpenAIClientFromCore(core *OpenAICore) domain.ToolCallingLLM {
 	return &OpenAIClient{
 		OpenAICore: core,
 	}
+}
+
+// ModelIdentifier implementation
+func (c *OpenAIClient) ModelID() string { return c.model }
+
+// TokenUsageProvider implementation (best-effort; populated when available)
+func (c *OpenAIClient) LastTokenUsage() (message.TokenUsage, bool) {
+	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
+		return c.lastUsage, true
+	}
+	return message.TokenUsage{}, false
+}
+
+// SessionAware implementation
+func (c *OpenAIClient) SetSessionID(id string) { c.sessionID = id }
+func (c *OpenAIClient) SessionID() string      { return c.sessionID }
+
+// ModelSideCacheConfigurator implementation (store hints for later use)
+func (c *OpenAIClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions) {
+	c.cacheOpts = opts
 }
 
 // Chat implements the basic LLM interface with thinking control
@@ -124,6 +149,15 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 	resp, err := c.client.Responses.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("Responses API call failed: %w", err)
+	}
+
+	// Capture token usage if provided
+	if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
+		c.lastUsage = message.TokenUsage{
+			InputTokens:  int(resp.Usage.InputTokens),
+			OutputTokens: int(resp.Usage.OutputTokens),
+			TotalTokens:  int(resp.Usage.TotalTokens),
+		}
 	}
 
 	// Extract response text and reasoning content
@@ -381,12 +415,21 @@ func (c *OpenAIClient) convertMessagesToResponsesInputItems(messages []message.M
 				inputItems = append(inputItems, inputItem)
 			}
 
+		case message.MessageTypeToolCallBatch:
+			// Batch messages are for internal coordination; skip sending them back to the model
+			// Individual tool calls/results are already added to the transcript
+			continue
+
 		default:
 			// Default to user role for unknown message types
 			inputItem := responses.ResponseInputItemParamOfMessage(msg.Content(), responses.EasyInputMessageRoleUser)
 			inputItems = append(inputItems, inputItem)
 		}
 	}
+
+	// TODO: When Responses API exposes prompt caching controls in openai-go,
+	// we can apply c.cacheOpts (PromptCachingEnabled/PolicyHint/SessionID) to
+	// the appropriate input items or request params here.
 
 	return inputItems
 }
@@ -529,9 +572,18 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 		return nil, fmt.Errorf("failed to get complete response: %w", err)
 	}
 
+	// Capture token usage if provided
+	if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
+		c.lastUsage = message.TokenUsage{
+			InputTokens:  int(resp.Usage.InputTokens),
+			OutputTokens: int(resp.Usage.OutputTokens),
+			TotalTokens:  int(resp.Usage.TotalTokens),
+		}
+	}
+
 	// Check for different types of output items using the variant system
 	var reasoningContent string
-	var toolCall *message.ToolCallMessage
+	var toolCalls []*message.ToolCallMessage
 
 	for _, outputItem := range resp.Output {
 		if os.Getenv("DEBUG_TOOLS") == "1" {
@@ -558,17 +610,15 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 				fmt.Printf("DEBUG: ResponseFunctionToolCall - Name: %s, Args: %s, CallID: %s\n",
 					variant.Name, variant.Arguments, variant.CallID)
 			}
-			// We found a function call - store it but continue processing other items
+			// Collect all function calls
 			if variant.Name != "" {
 				toolArgs := convertOpenAIArgsToToolArgs(variant.Arguments)
-
-				// Create tool call message with the OpenAI call ID for proper pairing
-				toolCall = message.NewToolCallMessageWithID(
+				toolCalls = append(toolCalls, message.NewToolCallMessageWithID(
 					variant.CallID,
 					message.ToolName(variant.Name),
 					toolArgs,
 					time.Now(),
-				)
+				))
 			}
 
 		case responses.ResponseFunctionWebSearch:
@@ -684,9 +734,11 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 	}
 
 	// Decide what to return based on what we found
-	// If we found a tool call, return it (tool calls take precedence)
-	if toolCall != nil {
-		return toolCall, nil
+	// If we found tool calls, return batch when multiple; single otherwise
+	if len(toolCalls) == 1 {
+		return toolCalls[0], nil
+	} else if len(toolCalls) > 1 {
+		return message.NewToolCallBatch(toolCalls), nil
 	}
 
 	// No tool calls found, return text response

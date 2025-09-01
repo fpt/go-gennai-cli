@@ -20,6 +20,8 @@ type OllamaCore struct {
 	model     string
 	maxTokens int
 	thinking  bool // Settings-based thinking control
+	// Telemetry
+	lastUsage message.TokenUsage
 }
 
 // NewOllamaCore creates a new Ollama core with shared resources
@@ -87,6 +89,17 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 			if thinkingBuilder.Len() > 0 && thinkingChan != nil {
 				message.EndThinking(thinkingChan)
 			}
+
+			// Capture token usage counts on final chunk when available
+			// Ollama typically exposes prompt_eval_count (input) and eval_count (output)
+			// Convert to our TokenUsage format for telemetry and logging
+			// These fields may be zero if the backend doesn't supply them.
+			c.lastUsage = message.TokenUsage{}
+			// Use reflection-like safe access via documented fields
+			// Direct struct fields are used here; if API changes, counts will stay zero.
+			c.lastUsage.InputTokens = int(resp.PromptEvalCount)
+			c.lastUsage.OutputTokens = int(resp.EvalCount)
+			c.lastUsage.TotalTokens = c.lastUsage.InputTokens + c.lastUsage.OutputTokens
 
 			// Combine accumulated content and thinking
 			result = api.Message{
@@ -183,6 +196,17 @@ func (c *OllamaClient) SupportsVision() bool {
 	return capable
 }
 
+// ModelIdentifier implementation
+func (c *OllamaClient) ModelID() string { return c.model }
+
+// TokenUsageProvider implementation
+func (c *OllamaClient) LastTokenUsage() (message.TokenUsage, bool) {
+	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
+		return c.lastUsage, true
+	}
+	return message.TokenUsage{}, false
+}
+
 // ChatWithToolChoice sends a message to Ollama with tool choice control
 func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert to Ollama format
@@ -225,13 +249,22 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
 
-	// If we have tool calls, return the first one
-	if len(result.ToolCalls) > 0 {
-		firstToolCall := result.ToolCalls[0]
+	// If we have tool calls, return batch when multiple; single otherwise
+	if len(result.ToolCalls) == 1 {
+		tc := result.ToolCalls[0]
 		return message.NewToolCallMessage(
-			message.ToolName(firstToolCall.Function.Name),
-			message.ToolArgumentValues(firstToolCall.Function.Arguments),
+			message.ToolName(tc.Function.Name),
+			message.ToolArgumentValues(tc.Function.Arguments),
 		), nil
+	} else if len(result.ToolCalls) > 1 {
+		calls := make([]*message.ToolCallMessage, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Function.Name),
+				message.ToolArgumentValues(tc.Function.Arguments),
+			))
+		}
+		return message.NewToolCallBatch(calls), nil
 	}
 
 	// Return the text content
@@ -285,13 +318,22 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
 
-	// If we have tool calls, return the first one
-	if len(result.ToolCalls) > 0 {
-		firstToolCall := result.ToolCalls[0]
+	// If we have tool calls, return batch when multiple; single otherwise
+	if len(result.ToolCalls) == 1 {
+		tc := result.ToolCalls[0]
 		return message.NewToolCallMessage(
-			message.ToolName(firstToolCall.Function.Name),
-			message.ToolArgumentValues(firstToolCall.Function.Arguments),
+			message.ToolName(tc.Function.Name),
+			message.ToolArgumentValues(tc.Function.Arguments),
 		), nil
+	} else if len(result.ToolCalls) > 1 {
+		calls := make([]*message.ToolCallMessage, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Function.Name),
+				message.ToolArgumentValues(tc.Function.Arguments),
+			))
+		}
+		return message.NewToolCallBatch(calls), nil
 	}
 
 	// Return the text content with thinking if available and enabled

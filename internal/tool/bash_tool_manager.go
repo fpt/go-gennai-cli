@@ -74,8 +74,8 @@ func (m *BashToolManager) RegisterTool(name message.ToolName, description messag
 
 // registerBashTools registers all bash command tools
 func (m *BashToolManager) registerBashTools() {
-	// Primary Bash tool (Claude Code-style)
-	m.RegisterTool("bash", "Execute shell commands with timeout and error handling",
+	// Primary Bash tool
+	m.RegisterTool("bash", "Execute shell commands with timeout and error handling. Prefer tools over shell for file reads/search (use Read/Glob/Grep/LS). Provide a short description; quote paths with spaces.",
 		[]message.ToolArgument{
 			{
 				Name:        "command",
@@ -128,35 +128,7 @@ func (m *BashToolManager) registerBashTools() {
 		},
 		m.handleGoRun)
 
-	// Grep search tool
-	m.RegisterTool("run_grep", "Search for patterns in files using grep",
-		[]message.ToolArgument{
-			{
-				Name:        "pattern",
-				Description: "Search pattern or regular expression",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "path",
-				Description: "File or directory path to search in (defaults to current directory)",
-				Required:    false,
-				Type:        "string",
-			},
-			{
-				Name:        "recursive",
-				Description: "Search recursively in subdirectories (default is true)",
-				Required:    false,
-				Type:        "boolean",
-			},
-			{
-				Name:        "case_sensitive",
-				Description: "Case sensitive search (default is false)",
-				Required:    false,
-				Type:        "boolean",
-			},
-		},
-		m.handleRunGrep)
+	// Note: dedicated Grep tool is provided by SearchToolManager; avoid duplicating here.
 }
 
 // resolvePath resolves a path relative to the working directory
@@ -176,7 +148,7 @@ func (m *BashToolManager) resolvePath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-// Main Bash handler - Claude Code style
+// Main Bash handler
 func (m *BashToolManager) handleBash(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	command, ok := args["command"].(string)
 	if !ok {

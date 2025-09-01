@@ -45,6 +45,12 @@ func (s *ScenarioAligner) InjectMessage(state domain.State, curIter, iterLimit i
 		} else {
 			// Regular tool result
 			messages = append(messages, "You received a tool result. Analyze it and decide next steps to respond to original user request.")
+
+			// Early-conclude heuristic: if validations succeeded, or all todos done, prompt to finalize now
+			content := lastMsg.Content()
+			if strings.Contains(content, "All validation checks passed") || strings.Contains(content, "Code compiles successfully") {
+				messages = append(messages, "Validation indicates success. If the user's request appears fully satisfied, provide a final concise response now and avoid further tool calls.")
+			}
 		}
 	}
 
@@ -54,6 +60,11 @@ func (s *ScenarioAligner) InjectMessage(state domain.State, curIter, iterLimit i
 			todosContext))
 
 		logger.DebugWithIcon("📋", "Enriched user message with todo context", "context_length", len(todosContext))
+	}
+
+	// If all todos are completed, nudge to conclude early
+	if s.todoToolManager != nil && s.todoToolManager.IsAllCompleted() {
+		messages = append(messages, "All todos are completed. Conclude with a final response and do not call more tools.")
 	}
 
 	if len(messages) > 0 {

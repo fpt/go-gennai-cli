@@ -60,6 +60,11 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 type AnthropicClient struct {
 	*AnthropicCore
 	toolManager domain.ToolManager
+
+	// Telemetry and caching/session hints
+	lastUsage message.TokenUsage
+	sessionID string
+	cacheOpts domain.ModelSideCacheOptions
 }
 
 // NewAnthropicClient creates a new Anthropic client with tool calling and thinking capabilities
@@ -85,6 +90,26 @@ func NewAnthropicClientFromCore(core *AnthropicCore) domain.ToolCallingLLM {
 	return &AnthropicClient{
 		AnthropicCore: core,
 	}
+}
+
+// ModelIdentifier implementation
+func (c *AnthropicClient) ModelID() string { return c.model }
+
+// TokenUsageProvider implementation (populated from Message.Usage when available)
+func (c *AnthropicClient) LastTokenUsage() (message.TokenUsage, bool) {
+	if c.lastUsage.InputTokens != 0 || c.lastUsage.OutputTokens != 0 || c.lastUsage.TotalTokens != 0 {
+		return c.lastUsage, true
+	}
+	return message.TokenUsage{}, false
+}
+
+// SessionAware implementation
+func (c *AnthropicClient) SetSessionID(id string) { c.sessionID = id }
+func (c *AnthropicClient) SessionID() string      { return c.sessionID }
+
+// ModelSideCacheConfigurator implementation (store hints for later use)
+func (c *AnthropicClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions) {
+	c.cacheOpts = opts
 }
 
 // IsToolCapable checks if the Anthropic client supports native tool calling
@@ -279,42 +304,65 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 	finalThinking := thinkingBuilder.String()
 	finalSignature := signatureBuilder.String()
 
-	// If we have tool calls, return the first one (for now)
+	// If we have tool calls, return a batch when multiple; single otherwise
 	if len(toolCalls) > 0 {
-		toolCall := toolCalls[0]
-		toolArgs := make(map[string]any)
-		if toolCall.Input != nil {
-			// Debug: Log the raw tool call input from Claude
-			fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
-
-			// Parse the JSON input to map[string]any
-			if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
-				return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+		if len(toolCalls) == 1 {
+			toolCall := toolCalls[0]
+			toolArgs := make(map[string]any)
+			if toolCall.Input != nil {
+				fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", toolCall.Name, string(toolCall.Input))
+				if err := json.Unmarshal(toolCall.Input, &toolArgs); err != nil {
+					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+				}
+				fmt.Printf("DEBUG: Parsed tool args: %v\n", toolArgs)
 			}
-
-			fmt.Printf("DEBUG: Parsed tool args: %v\n", toolArgs)
-		}
-
-		// Create tool call message with thinking content and signature if available
-		if finalThinking != "" && finalSignature != "" {
-			return message.NewToolCallMessageWithThinkingAndSignature(
+			if finalThinking != "" && finalSignature != "" {
+				return message.NewToolCallMessageWithThinkingAndSignature(
+					message.ToolName(toolCall.Name),
+					message.ToolArgumentValues(toolArgs),
+					finalThinking,
+					finalSignature,
+				), nil
+			} else if finalThinking != "" {
+				return message.NewToolCallMessageWithThinking(
+					message.ToolName(toolCall.Name),
+					message.ToolArgumentValues(toolArgs),
+					finalThinking,
+				), nil
+			}
+			return message.NewToolCallMessage(
 				message.ToolName(toolCall.Name),
 				message.ToolArgumentValues(toolArgs),
-				finalThinking,
-				finalSignature,
-			), nil
-		} else if finalThinking != "" {
-			return message.NewToolCallMessageWithThinking(
-				message.ToolName(toolCall.Name),
-				message.ToolArgumentValues(toolArgs),
-				finalThinking,
 			), nil
 		}
 
-		return message.NewToolCallMessage(
-			message.ToolName(toolCall.Name),
-			message.ToolArgumentValues(toolArgs),
-		), nil
+		// Build a batch of tool calls
+		var calls []*message.ToolCallMessage
+		for _, tc := range toolCalls {
+			args := make(map[string]any)
+			if tc.Input != nil {
+				fmt.Printf("DEBUG: Anthropic streaming accumulated tool call - name: %s, raw input: %s\n", tc.Name, string(tc.Input))
+				if err := json.Unmarshal(tc.Input, &args); err != nil {
+					return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
+				}
+				fmt.Printf("DEBUG: Parsed tool args: %v\n", args)
+			}
+			// No per-call thinking; preserve thinking at batch level via aligner/system as needed
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Name),
+				message.ToolArgumentValues(args),
+			))
+		}
+		return message.NewToolCallBatch(calls), nil
+	}
+
+	// Capture token usage if available in accumulated message
+	// Anthropic Usage includes: InputTokens, OutputTokens, CacheCreationInputTokens, CacheReadInputTokens
+	// We record input/output/total only for quick visibility; cache details can be added later if needed.
+	c.lastUsage = message.TokenUsage{
+		InputTokens:  int(acc.Usage.InputTokens),
+		OutputTokens: int(acc.Usage.OutputTokens),
+		TotalTokens:  int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
 	}
 
 	// Create response message with thinking content if available

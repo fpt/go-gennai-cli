@@ -105,7 +105,7 @@ func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "session.json"), nil
 }
 
-// generateProjectHash creates a safe directory name from a project path (Claude Code-style)
+// generateProjectHash creates a safe directory name from a project path
 func generateProjectHash(projectPath string) string {
 	// Claude Code uses full path with slashes replaced by dashes
 	// e.g., /Users/youichi.fujimoto/Documents/scratch/go-llama-code

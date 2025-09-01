@@ -18,15 +18,21 @@ const roleSystem = "system"
 func fromOllamaMessage(msg api.Message) message.Message {
 
 	// Handle tool calls from the model
-	if len(msg.ToolCalls) > 0 {
-		// For now, return the first tool call
-		// TODO: Handle multiple tool calls
+	if len(msg.ToolCalls) == 1 {
 		toolCall := msg.ToolCalls[0]
-
 		return message.NewToolCallMessage(
 			message.ToolName(toolCall.Function.Name),
 			message.ToolArgumentValues(toolCall.Function.Arguments),
 		)
+	} else if len(msg.ToolCalls) > 1 {
+		var calls []*message.ToolCallMessage
+		for _, tc := range msg.ToolCalls {
+			calls = append(calls, message.NewToolCallMessage(
+				message.ToolName(tc.Function.Name),
+				message.ToolArgumentValues(tc.Function.Arguments),
+			))
+		}
+		return message.NewToolCallBatch(calls)
 	}
 
 	// Handle regular messages
@@ -121,7 +127,6 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 				if toolResultMsg.Error != "" {
 					content = fmt.Sprintf("Error: %s", toolResultMsg.Error)
 				}
-
 				// For now, just send as a regular user message
 				// TODO: Implement proper tool result handling when API supports it
 				ollamaMessages = append(ollamaMessages, api.Message{
@@ -129,6 +134,9 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 					Content: content,
 				})
 			}
+		case message.MessageTypeToolCallBatch:
+			// Skip batch container in request reconstruction; individual calls/results are present
+			continue
 		}
 	}
 

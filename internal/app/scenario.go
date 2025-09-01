@@ -92,8 +92,11 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	}
 	bashToolManager := tool.NewBashToolManager(bashConfig)
 
+	// Create search tool manager (Glob/Grep)
+	searchToolManager := tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir})
+
 	// Create universal tool manager (always available tools)
-	universalManager := tool.NewCompositeToolManager(todoToolManager, filesystemManager, bashToolManager)
+	universalManager := tool.NewCompositeToolManager(todoToolManager, filesystemManager, bashToolManager, searchToolManager)
 
 	// Create solver tool manager for CSP solving (separate from universal tools)
 	solverToolManager := tool.NewSolverToolManager()
@@ -209,7 +212,7 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
 
-	// Save session state after successful interaction (like Claude Code)
+	// Save session state after successful interaction
 	if s.sessionFilePath != "" {
 		if saveErr := s.sharedState.SaveToFile(s.sessionFilePath); saveErr != nil {
 			s.logger.WarnWithIcon("⚠️", "Failed to save session state",
@@ -365,7 +368,7 @@ func (s *ScenarioRunner) createActionPrompt(userInput string, actionResp *Action
 		workingDir = "current directory"
 	}
 
-	// Get current todos for prompt injection (Claude Code-style)
+	// Get current todos for prompt injection
 	var todosContext string
 	if s.todoToolManager != nil {
 		todosContext = s.todoToolManager.GetTodosForPrompt()

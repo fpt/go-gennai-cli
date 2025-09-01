@@ -119,101 +119,47 @@ func (m *FileSystemToolManager) RegisterTool(name message.ToolName, description 
 
 // registerFileSystemTools registers all secure filesystem tools
 func (m *FileSystemToolManager) registerFileSystemTools() {
-	// Read file tool
-	m.RegisterTool("read_file", "Read file content with access control",
+	// Read with optional offset/limit and line-numbered output
+	m.RegisterTool("Read", "Read a file with optional offset/limit and line-numbered output",
 		[]message.ToolArgument{
-			{
-				Name:        "path",
-				Description: "Path to the file to read",
-				Required:    true,
-				Type:        "string",
-			},
+			{Name: "file_path", Description: "Path to the file to read", Required: true, Type: "string"},
+			{Name: "offset", Description: "1-based line start (optional)", Required: false, Type: "number"},
+			{Name: "limit", Description: "Number of lines to return (optional)", Required: false, Type: "number"},
 		},
-		m.handleReadFile)
+		m.handleRead)
 
-	// Write file tool
-	m.RegisterTool("write_file", "Write file content with read-write semantics validation. IMPORTANT: You must provide both 'path' (file path) and 'content' (full file content) parameters.",
+	// Write
+	m.RegisterTool("Write", "Write full content to a file",
 		[]message.ToolArgument{
-			{
-				Name:        "path",
-				Description: "Path to the file to write (required string parameter)",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "content",
-				Description: "Full content to write to the file (required string parameter)",
-				Required:    true,
-				Type:        "string",
-			},
+			{Name: "file_path", Description: "Path to the file to write", Required: true, Type: "string"},
+			{Name: "content", Description: "Full file content", Required: true, Type: "string"},
 		},
-		m.handleWriteFile)
+		m.handleWriteAlias)
 
-	// Enhanced Edit tool (Claude Code-style)
-	m.RegisterTool("edit_file", "Advanced file editing with precise string replacement (Claude Code-style)",
+	// Edit
+	m.RegisterTool("Edit", "Exact string replacement in a file (requires read-before-write semantics)",
 		[]message.ToolArgument{
-			{
-				Name:        "file_path",
-				Description: "Absolute path to the file to edit",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "old_string",
-				Description: "Exact multiline string to replace (must match exactly once unless replace_all=true)",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "new_string",
-				Description: "Precise replacement content (multiline supported)",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "replace_all",
-				Description: "Replace all occurrences of old_string (default: false, replaces only first occurrence)",
-				Required:    false,
-				Type:        "boolean",
-			},
+			{Name: "file_path", Description: "Path to the file to edit", Required: true, Type: "string"},
+			{Name: "old_string", Description: "Exact string to replace (unique unless replace_all)", Required: true, Type: "string"},
+			{Name: "new_string", Description: "Replacement string", Required: true, Type: "string"},
+			{Name: "replace_all", Description: "Replace all occurrences (default false)", Required: false, Type: "boolean"},
 		},
-		m.handleEnhancedEdit)
+		m.handleEdit)
 
-	// Directory listing (read-only, still secured)
-	m.RegisterTool("list_directory", "List directory contents with access control",
+	// LS with ignore globs
+	m.RegisterTool("LS", "List directory contents with optional ignore globs",
 		[]message.ToolArgument{
-			{
-				Name:        "path",
-				Description: "Path to the directory to list (defaults to current directory)",
-				Required:    false,
-				Type:        "string",
-			},
+			{Name: "path", Description: "Directory path to list", Required: true, Type: "string"},
+			{Name: "ignore", Description: "Array of glob patterns to ignore", Required: false, Type: "array"},
 		},
-		m.handleListDirectory)
+		m.handleLS)
 
-	// Find file tool (restricted to allowed directories)
-	m.RegisterTool("find_file", "Find files by name pattern using find command",
+	// MultiEdit: apply multiple precise edits across files in one call
+	m.RegisterTool("MultiEdit", "Apply multiple exact string replacements across files in a single, atomic batch. Requires prior Read of target files.",
 		[]message.ToolArgument{
-			{
-				Name:        "name_pattern",
-				Description: "File name pattern to search for (supports wildcards like *.go, *test*, etc.)",
-				Required:    true,
-				Type:        "string",
-			},
-			{
-				Name:        "path",
-				Description: "Directory path to search in (must be within allowed directories)",
-				Required:    false,
-				Type:        "string",
-			},
-			{
-				Name:        "type",
-				Description: "File type filter: 'f' for files, 'd' for directories, or 'both' (default: 'f')",
-				Required:    false,
-				Type:        "string",
-			},
+			{Name: "edits", Description: "Array of edits: {file_path, old_string, new_string, replace_all?}", Required: true, Type: "array"},
 		},
-		m.handleFindFile)
+		m.handleMultiEdit)
 }
 
 // Security validation methods
@@ -488,7 +434,7 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 
 	fileContent := string(content)
 
-	// Validate exact string matching (Claude Code behavior)
+	// Validate exact string matching
 	if !strings.Contains(fileContent, oldString) {
 		// Provide helpful debugging information
 		return message.NewToolResultError(fmt.Sprintf("old_string not found in file %s. Please ensure exact whitespace and formatting match.", absPath)), nil
@@ -580,6 +526,238 @@ func (m *FileSystemToolManager) handleListDirectory(ctx context.Context, args me
 	}
 
 	return message.NewToolResultText(result.String()), nil
+}
+
+// handleRead implements Read with optional paging and line numbering
+func (m *FileSystemToolManager) handleRead(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	pathParam, ok := args["file_path"].(string)
+	if !ok {
+		return message.NewToolResultError("file_path parameter is required"), nil
+	}
+
+	path, resolveErr := m.resolvePath(pathParam)
+	if resolveErr != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to resolve path: %v", resolveErr)), nil
+	}
+	if err := m.isPathAllowed(path); err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+	if err := m.isFileBlacklisted(path); err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+
+	contentBytes, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			m.recordFileRead(path)
+			return message.NewToolResultError(fmt.Sprintf("file does not exist: %s", path)), nil
+		}
+		return message.NewToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
+	}
+
+	// Record successful read
+	m.recordFileRead(path)
+
+	content := string(contentBytes)
+	lines := strings.Split(content, "\n")
+
+	// Determine paging
+	start := 0
+	if off, ok := args["offset"]; ok {
+		switch v := off.(type) {
+		case float64:
+			if v > 1 {
+				start = int(v) - 1
+			}
+		case int:
+			if v > 1 {
+				start = v - 1
+			}
+		}
+	}
+	end := len(lines)
+	if lim, ok := args["limit"]; ok {
+		switch v := lim.(type) {
+		case float64:
+			if v > 0 && start+int(v) < end {
+				end = start + int(v)
+			}
+		case int:
+			if v > 0 && start+v < end {
+				end = start + v
+			}
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	if end < start {
+		end = start
+	}
+
+	// Line-numbered output (cat -n style: spaces + line + tab + content)
+	var b strings.Builder
+	ln := start + 1
+	for i := start; i < end; i++ {
+		b.WriteString(fmt.Sprintf("%6d\t%s\n", ln, lines[i]))
+		ln++
+	}
+	return message.NewToolResultText(b.String()), nil
+}
+
+// handleWriteAlias maps to write_file
+func (m *FileSystemToolManager) handleWriteAlias(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	pathParam, ok := args["file_path"].(string)
+	if !ok {
+		return message.NewToolResultError("file_path parameter is required"), nil
+	}
+	if _, ok := args["content"].(string); !ok {
+		return message.NewToolResultError("content parameter is required"), nil
+	}
+	return m.handleWriteFile(ctx, message.ToolArgumentValues{
+		"path":    pathParam,
+		"content": args["content"],
+	})
+}
+
+// handleEdit maps to edit_file
+func (m *FileSystemToolManager) handleEdit(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	return m.handleEnhancedEdit(ctx, args)
+}
+
+// handleLS provides LS with ignore globs
+func (m *FileSystemToolManager) handleLS(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	pathParam, ok := args["path"].(string)
+	if !ok {
+		return message.NewToolResultError("path parameter is required"), nil
+	}
+
+	path, resolveErr := m.resolvePath(pathParam)
+	if resolveErr != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to resolve path: %v", resolveErr)), nil
+	}
+	if err := m.isPathAllowed(path); err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+
+	// Parse ignore patterns
+	var ignores []string
+	if raw, ok := args["ignore"]; ok {
+		if list, ok := raw.([]interface{}); ok {
+			for _, v := range list {
+				if s, ok := v.(string); ok {
+					ignores = append(ignores, s)
+				}
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to read directory: %v", err)), nil
+	}
+
+	matchesIgnore := func(name string) bool {
+		for _, pat := range ignores {
+			if ok, _ := filepath.Match(pat, name); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Contents of %s:\n", path))
+	for _, e := range entries {
+		name := e.Name()
+		if matchesIgnore(name) {
+			continue
+		}
+		if e.IsDir() {
+			b.WriteString(fmt.Sprintf("  %s/ (directory)\n", name))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s (file)\n", name))
+		}
+	}
+	return message.NewToolResultText(b.String()), nil
+}
+
+// handleMultiEdit processes a batch of exact string edits in one tool call
+func (m *FileSystemToolManager) handleMultiEdit(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	editsArg, ok := args["edits"]
+	if !ok {
+		return message.NewToolResultError("edits parameter is required"), nil
+	}
+
+	type edit struct {
+		FilePath   string
+		OldString  string
+		NewString  string
+		ReplaceAll bool
+	}
+
+	var edits []edit
+	switch v := editsArg.(type) {
+	case string:
+		// JSON string array
+		// To avoid pulling in JSON here, expect structured args (slice) path; return error
+		return message.NewToolResultError("edits must be an array, not a JSON string"), nil
+	case []interface{}:
+		for _, item := range v {
+			mapp, ok := item.(map[string]interface{})
+			if !ok {
+				return message.NewToolResultError("each edit must be an object"), nil
+			}
+			e := edit{}
+			if s, ok := mapp["file_path"].(string); ok {
+				e.FilePath = s
+			}
+			if s, ok := mapp["old_string"].(string); ok {
+				e.OldString = s
+			}
+			if s, ok := mapp["new_string"].(string); ok {
+				e.NewString = s
+			}
+			if b, ok := mapp["replace_all"].(bool); ok {
+				e.ReplaceAll = b
+			}
+			if e.FilePath == "" || e.OldString == "" || e.NewString == "" {
+				return message.NewToolResultError("each edit requires file_path, old_string, and new_string"), nil
+			}
+			edits = append(edits, e)
+		}
+	default:
+		return message.NewToolResultError("unsupported 'edits' parameter format"), nil
+	}
+
+	var results []string
+	for idx, e := range edits {
+		// Prepare arguments for the existing enhanced edit handler
+		editArgs := message.ToolArgumentValues{
+			"file_path":  e.FilePath,
+			"old_string": e.OldString,
+			"new_string": e.NewString,
+		}
+		if e.ReplaceAll {
+			editArgs["replace_all"] = true
+		}
+		res, _ := m.handleEnhancedEdit(ctx, editArgs)
+		if res.Error != "" {
+			results = append(results, fmt.Sprintf("%d) %s: ERROR: %s", idx+1, e.FilePath, res.Error))
+		} else {
+			// Trim validation details to first line for compactness
+			line := res.Text
+			if nl := strings.IndexByte(line, '\n'); nl > 0 {
+				line = line[:nl]
+			}
+			results = append(results, fmt.Sprintf("%d) %s: %s", idx+1, e.FilePath, line))
+		}
+	}
+
+	return message.NewToolResultText("MultiEdit results:\n" + strings.Join(results, "\n")), nil
 }
 
 // fileSystemTool is a helper struct for filesystem tool registration
@@ -698,7 +876,7 @@ type ValidationResult struct {
 func (m *FileSystemToolManager) autoValidateFile(ctx context.Context, filePath string) string {
 	// Get file extension
 	ext := strings.ToLower(filepath.Ext(filePath))
-	
+
 	switch ext {
 	case ".go":
 		return m.autoValidateGoFile(ctx, filePath)
@@ -713,7 +891,7 @@ func (m *FileSystemToolManager) autoValidateGoFile(ctx context.Context, filePath
 	// Find the directory containing go files
 	dir := filepath.Dir(filePath)
 	fileName := filepath.Base(filePath)
-	
+
 	// Check if this looks like a Go project (has .go files)
 	hasGoFiles, err := m.hasGoFilesInDirectory(dir)
 	if err != nil || !hasGoFiles {
@@ -721,15 +899,15 @@ func (m *FileSystemToolManager) autoValidateGoFile(ctx context.Context, filePath
 	}
 
 	results := []ValidationResult{}
-	
+
 	// Run go vet on the specific file
 	vetResult := m.runGoVet(ctx, dir, fileName)
 	results = append(results, vetResult)
-	
+
 	// Run go build -n (dry run) on the specific file
 	buildResult := m.runGoBuild(ctx, dir, fileName)
 	results = append(results, buildResult)
-	
+
 	// Format validation results
 	return m.formatValidationResults(results)
 }
@@ -740,7 +918,7 @@ func (m *FileSystemToolManager) hasGoFilesInDirectory(dir string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	
+
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
 			return true, nil
@@ -754,14 +932,14 @@ func (m *FileSystemToolManager) runGoVet(ctx context.Context, dir string, fileNa
 	result := ValidationResult{
 		Check: "go vet - Static analysis to find suspicious constructs",
 	}
-	
+
 	// Validate the specific file that was written/edited
 	cmd := exec.CommandContext(ctx, "go", "vet", fileName)
 	cmd.Dir = dir
-	
+
 	output, err := cmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
-	
+
 	if err != nil {
 		if outputStr != "" {
 			result.Status = "fail"
@@ -777,7 +955,7 @@ func (m *FileSystemToolManager) runGoVet(ctx context.Context, dir string, fileNa
 		result.Status = "pass"
 		result.Summary = "No vet issues found"
 	}
-	
+
 	return result
 }
 
@@ -786,14 +964,14 @@ func (m *FileSystemToolManager) runGoBuild(ctx context.Context, dir string, file
 	result := ValidationResult{
 		Check: "go build -n - Check if code compiles without building",
 	}
-	
+
 	// Validate the specific file that was written/edited
 	cmd := exec.CommandContext(ctx, "go", "build", "-n", fileName)
 	cmd.Dir = dir
-	
+
 	output, err := cmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
-	
+
 	if err != nil {
 		result.Status = "fail"
 		result.Output = outputStr
@@ -802,7 +980,7 @@ func (m *FileSystemToolManager) runGoBuild(ctx context.Context, dir string, file
 		result.Status = "pass"
 		result.Summary = "Code compiles successfully"
 	}
-	
+
 	return result
 }
 
@@ -811,13 +989,13 @@ func (m *FileSystemToolManager) formatValidationResults(results []ValidationResu
 	if len(results) == 0 {
 		return ""
 	}
-	
+
 	var output strings.Builder
 	output.WriteString("\n\n🔍 **Go Validation Results:**\n")
-	
+
 	passed := 0
 	failed := 0
-	
+
 	for _, result := range results {
 		switch result.Status {
 		case "pass":
@@ -829,7 +1007,7 @@ func (m *FileSystemToolManager) formatValidationResults(results []ValidationResu
 				// Limit output to prevent overwhelming response
 				lines := strings.Split(result.Output, "\n")
 				if len(lines) > 5 {
-					output.WriteString(fmt.Sprintf("```\n%s\n... (%d more lines)\n```\n", 
+					output.WriteString(fmt.Sprintf("```\n%s\n... (%d more lines)\n```\n",
 						strings.Join(lines[:5], "\n"), len(lines)-5))
 				} else {
 					output.WriteString(fmt.Sprintf("```\n%s\n```\n", result.Output))
@@ -840,12 +1018,12 @@ func (m *FileSystemToolManager) formatValidationResults(results []ValidationResu
 			output.WriteString(fmt.Sprintf("⚠️  %s: %s\n", result.Check, result.Summary))
 		}
 	}
-	
+
 	if failed == 0 {
 		output.WriteString(fmt.Sprintf("\n🎉 All %d validation checks passed!\n", passed))
 	} else {
 		output.WriteString(fmt.Sprintf("\n📊 Validation Summary: %d passed, %d failed\n", passed, failed))
 	}
-	
+
 	return output.String()
 }

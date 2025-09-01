@@ -101,6 +101,30 @@ func (r *ReAct) chatWithToolChoice(ctx context.Context, messages []message.Messa
 	return r.llmClient.Chat(ctx, messages, true, thinkingChan)
 }
 
+// annotateAndLogUsage attaches token usage (when available) to the response message
+// and prints a concise usage line for quick visibility.
+func (r *ReAct) annotateAndLogUsage(resp message.Message) {
+	// Get model ID if available
+	modelID := ""
+	if idProvider, ok := r.llmClient.(domain.ModelIdentifier); ok {
+		modelID = idProvider.ModelID()
+	}
+
+	// Get token usage if available
+	if usageProvider, ok := r.llmClient.(domain.TokenUsageProvider); ok {
+		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+			// Attach to message for persistence in state
+			resp.SetTokenUsage(usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+			// Print concise usage summary
+			if modelID != "" {
+				fmt.Printf("📈 Tokens [%s]: in %d, out %d, total %d\n", modelID, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+			} else {
+				fmt.Printf("📈 Tokens: in %d, out %d, total %d\n", usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+			}
+		}
+	}
+}
+
 // Invoke processes input using the configured maxIterations with external thinking channel
 func (r *ReAct) Invoke(ctx context.Context, input string, thinkingChan chan<- string) (message.Message, error) {
 	// Use the configured maxIterations instead of options.LoopLimit
@@ -154,11 +178,14 @@ func (r *ReAct) Invoke(ctx context.Context, input string, thinkingChan chan<- st
 
 		// Clear waiting indicator and show minified response
 		fmt.Print("\r                    \r") // Clear the "Thinking..." line
+		// Annotate and log token usage when available
+		r.annotateAndLogUsage(resp)
 		r.printMinifiedResponse(resp, i)
-		r.state.AddMessage(resp)
 
 		switch resp := resp.(type) {
 		case *message.ChatMessage:
+			// Add assistant response to state
+			r.state.AddMessage(resp)
 			// Check if this is reasoning (intermediate thinking) vs final answer
 			if resp.Type() == message.MessageTypeReasoning {
 				// Continue the ReAct loop for reasoning messages
@@ -171,6 +198,8 @@ func (r *ReAct) Invoke(ctx context.Context, input string, thinkingChan chan<- st
 			}
 
 		case *message.ToolCallMessage:
+			// Record the tool call message in state
+			r.state.AddMessage(resp)
 			toolCall := resp
 
 			// Show tool execution indicator
@@ -188,6 +217,24 @@ func (r *ReAct) Invoke(ctx context.Context, input string, thinkingChan chan<- st
 			r.state.AddMessage(msg)
 
 			// Continue to next iteration to process the tool result
+
+		case *message.ToolCallBatchMessage:
+			// Execute multiple tools within a single model turn to reduce loops
+			batch := resp
+			calls := batch.Calls()
+			for _, call := range calls {
+				// Add each tool call message to state for transcript consistency
+				r.state.AddMessage(call)
+				fmt.Printf("🔧 Running tool: %s\n", call.ToolName())
+				msg, err := r.handleToolCall(ctx, call)
+				if err != nil {
+					return nil, fmt.Errorf("failed to handle tool call (batch): %w", err)
+				}
+				r.printTruncatedToolResult(msg)
+				r.state.AddMessage(msg)
+			}
+			// After executing the batch, continue the loop to let the model consume results
+			continue
 
 		default:
 			return nil, fmt.Errorf("unexpected response type: %T", resp)

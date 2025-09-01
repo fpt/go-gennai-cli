@@ -16,6 +16,7 @@ const (
 	MessageTypeAssistant
 	MessageTypeSystem
 	MessageTypeToolCall
+	MessageTypeToolCallBatch
 	MessageTypeToolResult
 	MessageTypeReasoning
 )

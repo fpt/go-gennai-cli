@@ -30,16 +30,21 @@ func NewWebToolManager() domain.ToolManager {
 }
 
 func (m *WebToolManager) registerWebTools() {
-	m.RegisterTool("fetch_web", "Fetch and convert a webpage to markdown format",
+	// WebFetch (preferred)
+	m.RegisterTool("WebFetch", "Fetch a webpage over HTTP(S) and return main content as markdown. Follows typical headers; supply specific URLs.",
 		[]message.ToolArgument{
-			{
-				Name:        "url",
-				Description: "URL of the webpage to fetch and convert to markdown",
-				Required:    true,
-				Type:        "string",
-			},
+			{Name: "url", Description: "URL of the webpage to fetch and convert to markdown", Required: true, Type: "string"},
 		},
 		m.handleFetchWeb)
+
+	// WebSearch (stub): declare interface compatibility; return informative message
+	m.RegisterTool("WebSearch", "Search the web (stub). Not implemented in this build. Provide URLs or use WebFetch with a concrete link.",
+		[]message.ToolArgument{
+			{Name: "query", Description: "Search query", Required: true, Type: "string"},
+			{Name: "allowed_domains", Description: "Only include results from these domains", Required: false, Type: "array"},
+			{Name: "blocked_domains", Description: "Exclude results from these domains", Required: false, Type: "array"},
+		},
+		m.handleWebSearchStub)
 }
 
 // Implement domain.ToolManager interface
@@ -125,6 +130,16 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 	markdown := m.convertToMarkdown(doc, parsedURL)
 
 	return message.NewToolResultText(markdown), nil
+}
+
+// handleWebSearchStub returns a compatibility message explaining unavailability
+func (m *WebToolManager) handleWebSearchStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	query, _ := args["query"].(string)
+	msg := "WebSearch is not supported in this build. Provide relevant URLs or documents, or use WebFetch with a specific URL."
+	if query != "" {
+		msg = fmt.Sprintf("WebSearch not available. Query: %q. Please supply URLs, or use WebFetch.", query)
+	}
+	return message.NewToolResultText(msg), nil
 }
 
 // convertToMarkdown converts HTML document to clean markdown

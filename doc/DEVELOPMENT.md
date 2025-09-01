@@ -68,6 +68,11 @@ The system uses a **capability-based architecture** with type assertion for clea
 - `domain.LLM` - Base interface for basic chat functionality
 - `domain.ToolCallingLLM` - Extends LLM with tool calling capabilities  
 - `domain.StructuredLLM[T any]` - Extends LLM with type-safe structured output
+ - Optional telemetry & caching interfaces:
+   - `domain.TokenUsageProvider` — exposes last call token usage (if available)
+   - `domain.ModelIdentifier` — exposes stable model ID for telemetry/grouping
+   - `domain.SessionAware` — set/get provider-visible session ID (for provider caches)
+   - `domain.ModelSideCacheConfigurator` — pass provider-native caching hints (no local cache)
 
 **Type Assertion Pattern:**
 ```go
@@ -82,6 +87,21 @@ if toolClient, ok := client.(domain.ToolCallingLLM); ok {
 - **Clean Interfaces**: No redundant boolean methods
 - **Go Idioms**: Follows standard Go patterns for capability detection
 - **Self-Documenting**: Capabilities are clear through interface compliance
+
+### Token Usage & Provider-Native Caching
+
+GENNAI does not implement a local response cache. Instead, it provides hooks and optional interfaces so clients can:
+
+- Report token usage (for logs/telemetry) via `TokenUsageProvider`.
+- Identify the model via `ModelIdentifier` (useful for grouping/metrics).
+- Accept provider-native caching hints via `ModelSideCacheConfigurator` and `SessionAware`.
+
+Current status:
+- OpenAI (Responses API): token usage wired (input/output/total tokens) where the SDK exposes `responses.ResponseUsage`. Session/caching hints are stored for later use when the SDK surfaces prompt caching controls.
+- Anthropic/Gemini/Ollama: token usage and session/caching support will be added when their SDKs provide the required fields and toggles.
+
+Reference for provider-side caching:
+- OpenAI Prompt Caching: https://platform.openai.com/docs/guides/prompt-caching
 
 ## Tool Calling Support
 

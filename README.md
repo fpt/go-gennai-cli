@@ -14,6 +14,7 @@ The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a his
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
 - **MCP Server Support**: MCP Servers can be configured in settings.json
 - **Conversation State Management**: Automatic handling of conversation history and context
+- **Token Usage & Caching Foundations**: Per‑client token usage reporting (OpenAI supported) and provider‑native caching hints (session/prompt caching)
 
 ## Quick Start
 
@@ -192,11 +193,18 @@ For detailed development information, architecture details, and contributing gui
 This includes:
 - Architecture overview and design patterns
 - Structured output system with generics
+- Token usage reporting and provider‑native caching hooks
 - Testing and code quality guidelines
 - Project structure and contribution workflow
 - Model capabilities and integration testing
 
 ## ⚠️ Important Notices
+
+### Token Usage & Provider‑Native Caching
+- GENNAI exposes a foundation for per‑client token usage monitoring and provider‑native caching hints (no local cache layer).
+- OpenAI (Responses API) currently reports token usage; other clients will add support when their SDKs expose usage.
+- Provider‑side prompt caching (e.g., OpenAI Prompt Caching) can be enabled via client options when supported by the SDK.
+  - Reference: https://platform.openai.com/docs/guides/prompt-caching
 
 ### Responsible Use
 - This tool is provided for research and development purposes
@@ -227,4 +235,3 @@ This software is provided "as is" under the Apache 2.0 License without warranty 
 ## License
 
 This project is licensed under the Apache 2.0 License.
-
