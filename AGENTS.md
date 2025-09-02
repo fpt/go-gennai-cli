@@ -568,7 +568,7 @@ CUSTOM_ANALYSIS:
 **For OpenAI:**
 - Set `OPENAI_API_KEY` environment variable with your API key
 - API key can be obtained from https://platform.openai.com/api-keys
-- Optional: Set `OPENAI_BASE_URL` for Azure OpenAI or custom endpoints
+- Note: The client auto-detects streaming unsupported errors and permanently disables streaming for the session after the first failure.
 
 **For Google Gemini:**
 - Set `GEMINI_API_KEY` environment variable with your API key  
@@ -711,3 +711,8 @@ Tests use mocked dependencies to ensure:
 - Tool schema consistency across different model capabilities
 - Proper routing between native tool calling and schema-as-tool patterns
 - Thinking channel management and streaming
+
+## Troubleshooting (OpenAI)
+- 400 Bad Request with message "Your organization must be verified to stream this model": your account/org cannot use streaming for that model.
+  - Auto fallback: the client caches this condition and disables streaming for the rest of the session
+  - Use a model and/or account that allows streaming

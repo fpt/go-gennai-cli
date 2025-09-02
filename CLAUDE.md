@@ -568,7 +568,6 @@ CUSTOM_ANALYSIS:
 **For OpenAI:**
 - Set `OPENAI_API_KEY` environment variable with your API key
 - API key can be obtained from https://platform.openai.com/api-keys
-- Optional: Set `OPENAI_BASE_URL` for Azure OpenAI or custom endpoints
 
 **For Google Gemini:**
 - Set `GEMINI_API_KEY` environment variable with your API key  

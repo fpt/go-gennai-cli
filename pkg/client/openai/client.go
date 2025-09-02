@@ -23,12 +23,15 @@ type OpenAICore struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
+	// streamingUnsupported is set to true when the API rejects streaming
+	// (e.g., org not verified). Subsequent calls will avoid streaming.
+	streamingUnsupported bool
 }
 
 // OpenAIClient implements ToolCallingLLM and VisionLLM interfaces
 type OpenAIClient struct {
-    *OpenAICore
-    toolManager domain.ToolManager
+	*OpenAICore
+	toolManager domain.ToolManager
 
 	// Telemetry and caching/session hints
 	lastUsage message.TokenUsage
@@ -63,9 +66,10 @@ func NewOpenAIClient(model string, maxTokens int) (*OpenAIClient, error) {
 	}
 
 	core := &OpenAICore{
-		client:    &client,
-		model:     openaiModel,
-		maxTokens: maxTokens,
+		client:               &client,
+		model:                openaiModel,
+		maxTokens:            maxTokens,
+		streamingUnsupported: false,
 	}
 
 	return &OpenAIClient{
@@ -85,12 +89,12 @@ func (c *OpenAIClient) ModelID() string { return c.model }
 
 // ContextWindowProvider implementation
 func (c *OpenAIClient) MaxContextTokens() int {
-    caps := getModelCapabilities(c.model)
-    if caps.MaxContextWindow > 0 {
-        return caps.MaxContextWindow
-    }
-    // Conservative fallback aligned with ReAct's estimate for OpenAI
-    return 128000
+	caps := getModelCapabilities(c.model)
+	if caps.MaxContextWindow > 0 {
+		return caps.MaxContextWindow
+	}
+	// Conservative fallback aligned with ReAct's estimate for OpenAI
+	return 128000
 }
 
 // TokenUsageProvider implementation (best-effort; populated when available)
@@ -112,6 +116,11 @@ func (c *OpenAIClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions
 
 // Chat implements the basic LLM interface with thinking control
 func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
+	// Also respect cached fallback state from previous attempts
+	if c.OpenAICore != nil && c.OpenAICore.streamingUnsupported {
+		enableThinking = false
+	}
+
 	// Use streaming for progressive display when thinking is enabled
 	if enableThinking {
 		return c.chatWithStreaming(ctx, messages, true, thinkingChan)
@@ -330,6 +339,56 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 
 	// Check for streaming errors
 	if stream.Err() != nil {
+		// If streaming isn't allowed (e.g., org not verified), fallback to non-streaming
+		if isStreamingUnsupportedError(stream.Err()) {
+			// Cache the failure and avoid streaming for the rest of the session
+			if c.OpenAICore != nil {
+				if !c.OpenAICore.streamingUnsupported {
+					fmt.Fprintln(os.Stderr, "OpenAI: streaming not permitted; falling back to non-streaming.")
+				}
+				c.OpenAICore.streamingUnsupported = true
+			}
+			// Perform the same request without streaming
+			resp, err := c.client.Responses.New(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("failed non-streaming fallback after streaming unsupported: %w", err)
+			}
+
+			// Capture token usage if provided
+			if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
+				c.lastUsage = message.TokenUsage{
+					InputTokens:  int(resp.Usage.InputTokens),
+					OutputTokens: int(resp.Usage.OutputTokens),
+					TotalTokens:  int(resp.Usage.TotalTokens),
+				}
+			}
+
+			// Extract response text and reasoning content
+			outputText := resp.OutputText()
+			var reasoningContent string
+			for _, outputItem := range resp.Output {
+				if variant, ok := outputItem.AsAny().(responses.ResponseReasoningItem); ok {
+					if len(variant.Content) > 0 {
+						var reasoningParts []string
+						for _, content := range variant.Content {
+							if content.Text != "" {
+								reasoningParts = append(reasoningParts, content.Text)
+							}
+						}
+						reasoningContent = strings.Join(reasoningParts, "\n")
+					}
+				}
+			}
+
+			if outputText == "" {
+				return nil, fmt.Errorf("empty response from Responses API (non-streaming fallback)")
+			}
+
+			if reasoningContent != "" {
+				return message.NewChatMessageWithThinking(message.MessageTypeAssistant, outputText, reasoningContent), nil
+			}
+			return message.NewChatMessage(message.MessageTypeAssistant, outputText), nil
+		}
 		return nil, fmt.Errorf("Responses API streaming error: %w", stream.Err())
 	}
 
@@ -498,6 +557,11 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
+	if c.OpenAICore != nil && c.OpenAICore.streamingUnsupported {
+		// Direct non-streaming path using the same parsing as the streaming fallback
+		return c.chatWithToolChoiceNonStreaming(ctx, params, enableThinking, thinkingChan)
+	}
+
 	// Use streaming for progressive tool call display
 	return c.chatWithToolChoiceStreaming(ctx, params, enableThinking, thinkingChan)
 }
@@ -569,6 +633,16 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 
 	// Check for streaming errors
 	if stream.Err() != nil {
+		// If streaming isn't allowed (e.g., org not verified), fallback to non-streaming
+		if isStreamingUnsupportedError(stream.Err()) {
+			if c.OpenAICore != nil {
+				if !c.OpenAICore.streamingUnsupported {
+					fmt.Fprintln(os.Stderr, "OpenAI: streaming not permitted; falling back to non-streaming.")
+				}
+				c.OpenAICore.streamingUnsupported = true
+			}
+			return c.chatWithToolChoiceNonStreaming(ctx, params, enableThinking, thinkingChan)
+		}
 		return nil, fmt.Errorf("Responses API streaming error: %w", stream.Err())
 	}
 
@@ -817,4 +891,90 @@ type ResponseToolCall struct {
 func (c *OpenAIClient) SupportsVision() bool {
 	// GPT-4V models support vision
 	return strings.Contains(c.model, "gpt-4") && (strings.Contains(c.model, "vision") || strings.Contains(c.model, "gpt-4o"))
+}
+
+// isStreamingUnsupportedError checks whether the error indicates that streaming is not allowed
+// for the current account/organization (e.g., org not verified to stream this model).
+func isStreamingUnsupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	e := strings.ToLower(err.Error())
+	if strings.Contains(e, "must be verified to stream") {
+		return true
+	}
+	// Heuristic for OpenAI 400 error with param "stream" and code "unsupported_value"
+	if strings.Contains(e, "\"param\": \"stream\"") && strings.Contains(e, "unsupported_value") {
+		return true
+	}
+	// Generic hint when streaming parameter is rejected
+	if strings.Contains(e, "streaming error") && strings.Contains(e, "400") {
+		return true
+	}
+	return false
+}
+
+// chatWithToolChoiceNonStreaming mirrors the parsing logic used after streaming completes,
+// but performs a single non-streaming request. Used when streaming is disabled or unsupported.
+func (c *OpenAIClient) chatWithToolChoiceNonStreaming(ctx context.Context, params responses.ResponseNewParams, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
+	resp, err := c.client.Responses.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get complete response (non-streaming tool mode): %w", err)
+	}
+
+	// Capture token usage if provided
+	if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
+		c.lastUsage = message.TokenUsage{
+			InputTokens:  int(resp.Usage.InputTokens),
+			OutputTokens: int(resp.Usage.OutputTokens),
+			TotalTokens:  int(resp.Usage.TotalTokens),
+		}
+	}
+
+	// Check for different types of output items using the variant system
+	var reasoningContent string
+	var toolCalls []*message.ToolCallMessage
+
+	for _, outputItem := range resp.Output {
+		switch variant := outputItem.AsAny().(type) {
+		case responses.ResponseFunctionToolCall:
+			if variant.Name != "" {
+				toolArgs := convertOpenAIArgsToToolArgs(variant.Arguments)
+				toolCalls = append(toolCalls, message.NewToolCallMessageWithID(
+					variant.CallID,
+					message.ToolName(variant.Name),
+					toolArgs,
+					time.Now(),
+				))
+			}
+		case responses.ResponseReasoningItem:
+			if len(variant.Content) > 0 {
+				var reasoningParts []string
+				for _, content := range variant.Content {
+					if content.Text != "" {
+						reasoningParts = append(reasoningParts, content.Text)
+					}
+				}
+				reasoningContent = strings.Join(reasoningParts, "\n")
+			}
+		}
+	}
+
+	// If we found tool calls, return them
+	if len(toolCalls) == 1 {
+		return toolCalls[0], nil
+	} else if len(toolCalls) > 1 {
+		return message.NewToolCallBatch(toolCalls), nil
+	}
+
+	// Otherwise return text answer
+	finalText := resp.OutputText()
+	if finalText == "" {
+		return nil, fmt.Errorf("empty response from Responses API (non-streaming tool mode)")
+	}
+
+	if reasoningContent != "" {
+		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, finalText, reasoningContent), nil
+	}
+	return message.NewChatMessage(message.MessageTypeAssistant, finalText), nil
 }

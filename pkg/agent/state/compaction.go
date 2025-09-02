@@ -1,13 +1,14 @@
 package state
 
 import (
-	"context"
-	"fmt"
-	"strings"
+    "context"
+    "fmt"
+    "math"
+    "strings"
 
-	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
-	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
-	"github.com/fpt/go-gennai-cli/pkg/message"
+    "github.com/fpt/go-gennai-cli/pkg/agent/domain"
+    pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
+    "github.com/fpt/go-gennai-cli/pkg/message"
 )
 
 // Package-level logger for state management operations
@@ -61,34 +62,86 @@ func (c *MessageState) CleanupMandatory() error {
 
 // CompactIfNeeded performs compaction only if token usage exceeds threshold
 func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxTokens int, thresholdPercent float64) error {
-	if maxTokens <= 0 {
-		return nil // No token limit specified
-	}
+    if maxTokens <= 0 {
+        return nil // No token limit specified
+    }
 
-	_, _, totalTokens := c.GetTotalTokenUsage()
-	threshold := float64(maxTokens) * (thresholdPercent / 100.0)
-	usagePercent := (float64(totalTokens) / float64(maxTokens)) * 100
+    // Prefer an estimate based on content length rather than cumulative historical usage,
+    // which double-counts across turns. If the client exposes last token usage, use it as a
+    // baseline and add a small estimate for the newly added user message.
 
-	logger.DebugWithIcon("📊", "Token usage check",
-		"current_tokens", totalTokens,
-		"max_tokens", maxTokens,
-		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent),
-		"threshold_tokens", int(threshold))
+    // Helper to estimate tokens from message content (rough heuristic ~4 chars/token)
+    estimateTokensFor := func(msg message.Message) int {
+        // Combine primary content and thinking text for a conservative estimate
+        content := msg.Content()
+        if t := msg.Thinking(); t != "" {
+            content += "\n" + t
+        }
+        // Count only text; images are ignored (older ones truncated already)
+        // Add small per-message overhead
+        approx := int(math.Ceil(float64(len(content)) / 4.0)) + 8
+        if approx < 0 { // safety for overflows (unlikely)
+            approx = 0
+        }
+        return approx
+    }
 
-	if float64(totalTokens) < threshold {
-		logger.DebugWithIcon("📊", "Token usage below threshold, skipping compaction",
-			"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-			"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
-		return nil // Below threshold, no compaction needed
-	}
+    messages := c.Messages
 
-	logger.InfoWithIcon("📊", "Token usage exceeds threshold, performing compaction",
-		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
+    // 1) Message-count-based safeguard: if conversation is very long, compact regardless of tokens
+    const maxMessagesThreshold = 50
+    if len(messages) > maxMessagesThreshold {
+        logger.InfoWithIcon("📦", "Message count exceeds threshold, performing compaction",
+            "count", len(messages), "threshold", maxMessagesThreshold)
+        return c.performCompaction(ctx, llm)
+    }
 
-	// Perform the full compaction process
-	return c.performCompaction(ctx, llm)
+    // 2) Token-usage estimate
+    var estimatedInputTokens int
+
+    // If the client provides last token usage (input tokens for last call), start from that
+    if usageProvider, ok := llm.(domain.TokenUsageProvider); ok {
+        if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+            estimatedInputTokens = usage.InputTokens
+            // Add estimate for the newest user message if present (added before compaction)
+            if len(messages) > 0 {
+                last := messages[len(messages)-1]
+                if last.Type() == message.MessageTypeUser {
+                    estimatedInputTokens += estimateTokensFor(last)
+                }
+            }
+        }
+    }
+
+    // Fallback: estimate from all messages' content if we don't have recent telemetry
+    if estimatedInputTokens == 0 {
+        for _, m := range messages {
+            estimatedInputTokens += estimateTokensFor(m)
+        }
+    }
+
+    threshold := float64(maxTokens) * (thresholdPercent / 100.0)
+    usagePercent := (float64(estimatedInputTokens) / float64(maxTokens)) * 100
+
+    logger.DebugWithIcon("📊", "Estimated input token usage",
+        "estimated_input_tokens", estimatedInputTokens,
+        "max_tokens", maxTokens,
+        "usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
+        "threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent),
+        "threshold_tokens", int(threshold))
+
+    if float64(estimatedInputTokens) < threshold {
+        logger.DebugWithIcon("📊", "Usage below threshold, skipping compaction",
+            "usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
+            "threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
+        return nil
+    }
+
+    logger.InfoWithIcon("📊", "Estimated tokens exceed threshold, performing compaction",
+        "usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
+        "threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
+
+    return c.performCompaction(ctx, llm)
 }
 
 // GetTotalTokenUsage returns the total token usage across all messages
@@ -103,7 +156,10 @@ func (c *MessageState) GetTotalTokenUsage() (inputTokens, outputTokens, totalTok
 
 // performCompaction contains the original compaction logic
 func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) error {
-	messages := c.Messages
+    messages := c.Messages
+
+    // Reset counters before compaction to avoid double counting across histories
+    c.ResetTokenCounters()
 
 	// Simple compaction strategy: keep recent messages, summarize older ones
 	const maxMessages = 50
@@ -153,12 +209,18 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 		logger.DebugWithIcon("🧹", "Skipped alignment messages during compaction",
 			"skipped_count", skippedAlignment)
 	}
-	logger.InfoWithIcon("📝", "Message compaction completed",
-		"before_count", len(messages),
-		"after_count", len(c.Messages),
-		"compression_ratio", fmt.Sprintf("%.1f%%", float64(len(c.Messages))/float64(len(messages))*100))
+    logger.InfoWithIcon("📝", "Message compaction completed",
+        "before_count", len(messages),
+        "after_count", len(c.Messages),
+        "compression_ratio", fmt.Sprintf("%.1f%%", float64(len(c.Messages))/float64(len(messages))*100))
 
-	return nil
+    // Update token counters based on current messages (sum of input+output)
+    c.RecalculateTokenCountersFromMessages()
+    in, out, total := c.TokenCountersSnapshot()
+    logger.InfoWithIcon("📈", "Token counters updated after compaction",
+        "input_tokens", in, "output_tokens", out, "total_tokens", total)
+
+    return nil
 }
 
 // findSafeSplitPoint finds a split point that doesn't break tool call chains

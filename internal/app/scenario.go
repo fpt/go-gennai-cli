@@ -170,8 +170,6 @@ func (s *ScenarioRunner) Invoke(ctx context.Context, userInput string, scenarioN
 		return nil, fmt.Errorf("scenario '%s' not found", scenarioName)
 	}
 
-	fmt.Printf("📋 Using scenario: %s\n", scenarioName)
-
 	// Create thinking channel for streaming thinking messages
 	thinkingChan := message.CreateThinkingChannel()
 
@@ -205,39 +203,39 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 		Reasoning: reasoning,
 	}
 
-    // Prepare a stable system prompt (scenario header) and insert only when changed
-    // Render with empty userInput so the header remains stable across turns;
-    // include workingDir and reasoning so those parts remain accurate.
-    if scenarioConfig, exists := s.scenarios[actionResp.Action]; exists {
-        systemPrompt := scenarioConfig.RenderPrompt("", actionResp.Reasoning, s.workingDir)
-        if systemPrompt != "" {
-            // Use a discoverable marker so we can detect previous insertion
-            marker := fmt.Sprintf("[[SCENARIO_PROMPT:%s]]\n", actionResp.Action)
-            candidate := marker + systemPrompt
+	// Prepare a stable system prompt (scenario header) and insert only when changed
+	// Render with empty userInput so the header remains stable across turns;
+	// include workingDir and reasoning so those parts remain accurate.
+	if scenarioConfig, exists := s.scenarios[actionResp.Action]; exists {
+		systemPrompt := scenarioConfig.RenderPrompt("", actionResp.Reasoning, s.workingDir)
+		if systemPrompt != "" {
+			// Use a discoverable marker so we can detect previous insertion
+			marker := fmt.Sprintf("[[SCENARIO_PROMPT:%s]]\n", actionResp.Action)
+			candidate := marker + systemPrompt
 
-            // Find the most recent matching marker message
-            var lastMatched string
-            for _, msg := range s.sharedState.GetMessages() {
-                if msg.Type() == message.MessageTypeSystem && strings.HasPrefix(msg.Content(), marker) {
-                    lastMatched = msg.Content()
-                }
-            }
+			// Find the most recent matching marker message
+			var lastMatched string
+			for _, msg := range s.sharedState.GetMessages() {
+				if msg.Type() == message.MessageTypeSystem && strings.HasPrefix(msg.Content(), marker) {
+					lastMatched = msg.Content()
+				}
+			}
 
-            if lastMatched == "" || lastMatched != candidate {
-                s.sharedState.AddMessage(message.NewSystemMessage(candidate))
-            }
-        }
-    }
+			if lastMatched == "" || lastMatched != candidate {
+				s.sharedState.AddMessage(message.NewSystemMessage(candidate))
+			}
+		}
+	}
 
-    // Build the user-facing prompt content (raw request + current todos)
-    userPrompt := userInput
-    if s.todoToolManager != nil {
-        if todosContext := s.todoToolManager.GetTodosForPrompt(); todosContext != "" {
-            userPrompt = fmt.Sprintf("%s\n\n## Current Todos:\n%s\n\nUse TodoWrite tool to update todos as you progress.", userPrompt, todosContext)
-        }
-    }
+	// Build the user-facing prompt content (raw request + current todos)
+	userPrompt := userInput
+	if s.todoToolManager != nil {
+		if todosContext := s.todoToolManager.GetTodosForPrompt(); todosContext != "" {
+			userPrompt = fmt.Sprintf("%s\n\n## Current Todos:\n%s\n\nUse TodoWrite tool to update todos as you progress.", userPrompt, todosContext)
+		}
+	}
 
-    result, err := reactClient.Invoke(ctx, userPrompt, thinkingChan)
+	result, err := reactClient.Invoke(ctx, userPrompt, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
@@ -269,8 +267,40 @@ func (s *ScenarioRunner) ClearHistory() {
 
 // getToolManagerForScenario returns the appropriate tool manager for a given scenario
 func (s *ScenarioRunner) getToolManagerForScenario(scenario string) domain.ToolManager {
-	// Universal manager is always included (todos, filesystem, bash, grep)
-	managers := []domain.ToolManager{s.universalManager}
+    // Special case: EDITOR_CODE uses a proposal-only tool manager (no direct writes)
+    if strings.EqualFold(scenario, "EDITOR_CODE") {
+        // Compose: todo + search + proposal (+ web/MCP if requested)
+        fsConfig := infra.DefaultFileSystemConfig(s.workingDir)
+        proposalManager := tool.NewProposalToolManager(fsConfig, s.workingDir)
+        searchToolManager := tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: s.workingDir})
+
+        managers := []domain.ToolManager{s.todoToolManager, searchToolManager, proposalManager}
+
+        if scenarioConfig, exists := s.scenarios[scenario]; exists {
+            toolScope := scenarioConfig.GetToolScope()
+            if toolScope.UseDefault { // add web tools if requested
+                managers = append(managers, s.webToolManager)
+            }
+            // Add any requested MCP managers
+            for _, mcpName := range toolScope.MCPTools {
+                if mcpName == "*" {
+                    for _, m := range s.mcpToolManagers {
+                        managers = append(managers, m)
+                    }
+                } else if m, ok := s.mcpToolManagers[mcpName]; ok {
+                    managers = append(managers, m)
+                }
+            }
+        }
+
+        if len(managers) == 1 {
+            return managers[0]
+        }
+        return tool.NewCompositeToolManager(managers...)
+    }
+
+    // Universal manager is always included (todos, filesystem, bash, grep)
+    managers := []domain.ToolManager{s.universalManager}
 
 	// Check if we have YAML configuration for this scenario
 	if scenarioConfig, exists := s.scenarios[scenario]; exists {

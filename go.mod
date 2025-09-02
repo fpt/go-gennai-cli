@@ -8,6 +8,7 @@ require (
 	github.com/chzyer/readline v1.5.1
 	github.com/expr-lang/expr v1.17.6
 	github.com/gnboorse/centipede v1.0.2
+	github.com/hexops/gotextdiff v1.0.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mark3labs/mcp-go v0.34.0
