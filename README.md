@@ -4,7 +4,7 @@ A CLI-based AI coding agent supporting multiple LLM backends, using ReAct (Reaso
 
 Default scenario focuses on coding tasks with ToDo management, various built-in tools, and user-configured tools via MCP client functionality.
 
-The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan.
+The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan. In my opinion, ReAct agent acts like Karakuri.
 
 ## Features
 
