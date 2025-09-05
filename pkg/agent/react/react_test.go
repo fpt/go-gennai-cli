@@ -555,11 +555,11 @@ func TestReAct_compaction(t *testing.T) {
 		description       string
 	}{
 		{
-			name:              "NoCompactionNeeded",
+			name:              "SmallConversationCompacted",
 			initialMessages:   30,
-			expectedCompacted: false,
-			expectedFinal:     30,
-			description:       "Should not compact when messages <= 50",
+			expectedCompacted: true,  // Changed: token-based compaction detects high usage
+			expectedFinal:     11,    // Changed: 1 summary + 10 recent
+			description:       "Should compact when token usage is high regardless of message count",
 		},
 		{
 			name:              "CompactionTriggered",
@@ -569,11 +569,11 @@ func TestReAct_compaction(t *testing.T) {
 			description:       "Should compact when messages > 50",
 		},
 		{
-			name:              "EdgeCaseMaxMessages",
+			name:              "EdgeCaseHighUsage",
 			initialMessages:   50,
-			expectedCompacted: false,
-			expectedFinal:     50,
-			description:       "Should not compact at exactly 50 messages",
+			expectedCompacted: true,  // Changed: token-based compaction detects high usage
+			expectedFinal:     11,    // Changed: 1 summary + 10 recent  
+			description:       "Should compact when token usage is high (50 messages * 1500 tokens = 75K in 25K context)",
 		},
 		{
 			name:              "LargeMessageSet",

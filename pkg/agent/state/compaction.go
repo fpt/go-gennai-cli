@@ -3,7 +3,6 @@ package state
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -13,6 +12,13 @@ import (
 
 // Package-level logger for state management operations
 var logger = pkgLogger.NewComponentLogger("state-manager")
+
+// Standard compaction strategy - universal values for all models
+const (
+	CompactAtPercent    = 0.70  // Trigger compaction at 70% of context window
+	TargetAfterPercent  = 0.35  // Compact down to 35% of context window
+	MinReductionTokens  = 5000  // Must save at least 5K tokens to be worthwhile
+)
 
 // CleanupMandatory performs mandatory cleanup without compaction
 // - Removes aligner messages (mandatory for context purity)
@@ -60,86 +66,98 @@ func (c *MessageState) CleanupMandatory() error {
 	return nil
 }
 
-// CompactIfNeeded performs compaction only if token usage exceeds threshold
+// getAccurateTokenCount returns the most accurate token count available
+func (c *MessageState) getAccurateTokenCount(llm domain.LLM) int {
+	// Try to get actual token usage from the LLM client first
+	if usageProvider, ok := llm.(domain.TokenUsageProvider); ok {
+		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 && usage.InputTokens > 0 {
+			// Use actual input token count from last request as baseline
+			// This is the most accurate measure of current context size
+			return usage.InputTokens
+		}
+	}
+
+	// Fallback: estimate from message content (improved heuristic)
+	return c.estimateTokensFromMessages()
+}
+
+// estimateTokensFromMessages provides improved token estimation from message content
+func (c *MessageState) estimateTokensFromMessages() int {
+	var totalTokens int
+	
+	for _, msg := range c.Messages {
+		// Use stored token usage if available (most accurate)
+		if stored := msg.TotalTokens(); stored > 0 {
+			totalTokens += stored
+			continue
+		}
+		
+		// Improved estimation heuristic
+		content := msg.Content()
+		thinking := msg.Thinking()
+		
+		// Combine content and thinking for total character count
+		totalChars := len(content) + len(thinking)
+		
+		// Conservative token estimation (to avoid overestimating)
+		// Use the original simple approach to maintain compatibility
+		var estimatedTokens int
+		if totalChars > 0 {
+			// Simple heuristic: ~4 chars/token + small overhead
+			estimatedTokens = int(float64(totalChars)/4.0) + 8
+		} else {
+			estimatedTokens = 8 // Minimum overhead for empty messages
+		}
+		
+		totalTokens += estimatedTokens
+	}
+	
+	return totalTokens
+}
+
+// CompactIfNeeded performs efficient token-based compaction
 func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxTokens int, thresholdPercent float64) error {
 	if maxTokens <= 0 {
 		return nil // No token limit specified
 	}
 
-	// Prefer an estimate based on content length rather than cumulative historical usage,
-	// which double-counts across turns. If the client exposes last token usage, use it as a
-	// baseline and add a small estimate for the newly added user message.
-
-	// Helper to estimate tokens from message content (rough heuristic ~4 chars/token)
-	estimateTokensFor := func(msg message.Message) int {
-		// Combine primary content and thinking text for a conservative estimate
-		content := msg.Content()
-		if t := msg.Thinking(); t != "" {
-			content += "\n" + t
-		}
-		// Count only text; images are ignored (older ones truncated already)
-		// Add small per-message overhead
-		approx := int(math.Ceil(float64(len(content))/4.0)) + 8
-		if approx < 0 { // safety for overflows (unlikely)
-			approx = 0
-		}
-		return approx
-	}
-
-	messages := c.Messages
-
-	// 1) Message-count-based safeguard: if conversation is very long, compact regardless of tokens
-	const maxMessagesThreshold = 50
-	if len(messages) > maxMessagesThreshold {
-		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Message count exceeds threshold, performing compaction",
-			"count", len(messages), "threshold", maxMessagesThreshold)
-		return c.performCompaction(ctx, llm)
-	}
-
-	// 2) Token-usage estimate
-	var estimatedInputTokens int
-
-	// If the client provides last token usage (input tokens for last call), start from that
-	if usageProvider, ok := llm.(domain.TokenUsageProvider); ok {
-		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
-			estimatedInputTokens = usage.InputTokens
-			// Add estimate for the newest user message if present (added before compaction)
-			if len(messages) > 0 {
-				last := messages[len(messages)-1]
-				if last.Type() == message.MessageTypeUser {
-					estimatedInputTokens += estimateTokensFor(last)
-				}
-			}
-		}
-	}
-
-	// Fallback: estimate from all messages' content if we don't have recent telemetry
-	if estimatedInputTokens == 0 {
-		for _, m := range messages {
-			estimatedInputTokens += estimateTokensFor(m)
-		}
-	}
-
-	threshold := float64(maxTokens) * (thresholdPercent / 100.0)
-	usagePercent := (float64(estimatedInputTokens) / float64(maxTokens)) * 100
-
-	logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Estimated input token usage",
-		"estimated_input_tokens", estimatedInputTokens,
+	// Get accurate current token count
+	currentTokens := c.getAccurateTokenCount(llm)
+	
+	// Calculate thresholds using standard compaction strategy
+	compactThreshold := int(float64(maxTokens) * CompactAtPercent)
+	targetAfterCompaction := int(float64(maxTokens) * TargetAfterPercent)
+	
+	usagePercent := (float64(currentTokens) / float64(maxTokens)) * 100
+	
+	logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Token-based compaction check",
+		"current_tokens", currentTokens,
 		"max_tokens", maxTokens,
 		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent),
-		"threshold_tokens", int(threshold))
+		"compact_threshold", compactThreshold,
+		"target_after", targetAfterCompaction)
 
-	if float64(estimatedInputTokens) < threshold {
-		logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Usage below threshold, skipping compaction",
+	// Check if we need to compact
+	if currentTokens < compactThreshold {
+		logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Usage below compaction threshold, skipping",
 			"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-			"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
+			"threshold", fmt.Sprintf("%.1f%%", CompactAtPercent*100))
+		return nil
+	}
+	
+	// Check if compaction will save meaningful tokens
+	tokensToSave := currentTokens - targetAfterCompaction
+	if tokensToSave < MinReductionTokens {
+		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Compaction would save too few tokens, skipping",
+			"tokens_to_save", tokensToSave, "min_reduction", MinReductionTokens)
 		return nil
 	}
 
-	logger.InfoWithIntention(pkgLogger.IntentionStatistics, "Estimated tokens exceed threshold, performing compaction",
+	logger.InfoWithIntention(pkgLogger.IntentionStatus, "Performing token-based compaction",
+		"current_tokens", currentTokens,
 		"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
-		"threshold_percent", fmt.Sprintf("%.1f%%", thresholdPercent))
+		"target_tokens", targetAfterCompaction,
+		"tokens_to_save", tokensToSave)
 
 	return c.performCompaction(ctx, llm)
 }
@@ -161,22 +179,39 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 	// Reset counters before compaction to avoid double counting across histories
 	c.ResetTokenCounters()
 
-	// Simple compaction strategy: keep recent messages, summarize older ones
-	const maxMessages = 50
-	const preserveRecent = 10
+	// Block-based compaction strategy: keep recent complete conversation blocks
+	const preserveRecentBlocks = 5  // Keep the last 5 complete conversation blocks
+	
+	// Always perform compaction if we reach this point (either from token or message threshold)
 
-	if len(messages) <= maxMessages {
-		return nil // No compaction needed
+	// Try block-based compaction first
+	blocksToPreserve := findConversationBlocksToPreserve(messages, preserveRecentBlocks)
+	
+	var olderMessages, recentMessages []message.Message
+	
+	// Try to use block-based compaction, but ensure we preserve at least 10 messages for compatibility
+	const minMessagesToPreserve = 10
+	
+	if len(blocksToPreserve) > 0 && len(blocksToPreserve) >= minMessagesToPreserve && len(blocksToPreserve) < len(messages)-5 {
+		// Block-based compaction with good number of messages
+		splitIndex := len(messages) - len(blocksToPreserve)
+		olderMessages = messages[:splitIndex]
+		recentMessages = blocksToPreserve
+		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Using block-based compaction",
+			"total_messages", len(messages), "blocks_preserved", len(blocksToPreserve))
+	} else {
+		// Fallback to message-count based compaction
+		const preserveRecent = 10
+		splitPoint := findSafeSplitPoint(messages, preserveRecent)
+		if splitPoint <= 0 {
+			logger.DebugWithIntention(pkgLogger.IntentionDebug, "No safe split point found, skipping compaction")
+			return nil
+		}
+		olderMessages = messages[:splitPoint]
+		recentMessages = messages[splitPoint:]
+		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Using fallback message-based compaction",
+			"total_messages", len(messages), "messages_preserved", len(recentMessages))
 	}
-
-	// Find a safe split point that doesn't break tool call chains
-	splitPoint := findSafeSplitPoint(messages, preserveRecent)
-	if splitPoint <= 0 {
-		return nil // Not enough messages to compact safely
-	}
-
-	olderMessages := messages[:splitPoint]
-	recentMessages := messages[splitPoint:]
 
 	// Create an LLM-generated summary of older messages (with vision truncation applied)
 	summary, err := c.createLLMSummary(ctx, llm, olderMessages)
@@ -412,4 +447,47 @@ func createBasicMessageSummary(messages []message.Message) string {
 // isAlignmentMessage checks if a message was injected by the Aligner and should be removed during compaction
 func isAlignmentMessage(msg message.Message) bool {
 	return msg.Source() == message.MessageSourceAligner
+}
+
+// findConversationBlocksToPreserve finds the last N complete conversation blocks to preserve
+// A conversation block consists of: User prompt -> [Tool calls + Tool results]* -> Assistant response
+func findConversationBlocksToPreserve(messages []message.Message, blocksToKeep int) []message.Message {
+	if len(messages) == 0 || blocksToKeep <= 0 {
+		return []message.Message{}
+	}
+
+	// Find conversation blocks by working backwards
+	blocks := make([][]message.Message, 0)
+	currentBlock := make([]message.Message, 0)
+	
+	// Work backwards to identify complete blocks
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		currentBlock = append([]message.Message{msg}, currentBlock...) // Prepend to maintain order
+		
+		// A block starts with a user message
+		if msg.Type() == message.MessageTypeUser {
+			// We found the start of a block
+			blocks = append([][]message.Message{currentBlock}, blocks...) // Prepend to maintain order
+			currentBlock = make([]message.Message, 0)
+			
+			// Stop if we have enough blocks
+			if len(blocks) >= blocksToKeep {
+				break
+			}
+		}
+	}
+	
+	// Flatten the blocks we want to keep
+	var result []message.Message
+	for _, block := range blocks {
+		result = append(result, block...)
+	}
+	
+	// Also preserve any incomplete block at the beginning (might be ongoing)
+	if len(currentBlock) > 0 && len(blocks) < blocksToKeep {
+		result = append(currentBlock, result...)
+	}
+	
+	return result
 }
