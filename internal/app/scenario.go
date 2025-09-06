@@ -16,6 +16,7 @@ import (
 
 	"github.com/fpt/go-gennai-cli/internal/config"
 	"github.com/fpt/go-gennai-cli/internal/infra"
+	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/internal/scenarios"
 	"github.com/fpt/go-gennai-cli/internal/tool"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
@@ -61,11 +62,12 @@ type ActionSelectionResponse struct {
 
 // ScenarioRunner handles scenario-based planning and sequential action execution
 type ScenarioRunner struct {
-	llmClient        domain.LLM                    // Base LLM client
-	universalManager *tool.CompositeToolManager    // Universal tools (always available: todos, filesystem, bash, grep)
-	todoToolManager  *tool.TodoToolManager         // Direct access to TodoToolManager for aligner
-	webToolManager   *tool.WebToolManager          // Optional web tools for web scenarios
-	mcpToolManagers  map[string]domain.ToolManager // MCP tool managers by name
+	llmClient        domain.LLM                      // Base LLM client
+	universalManager *tool.CompositeToolManager      // Universal tools (always available: todos, filesystem, bash, grep)
+	todoToolManager  *tool.TodoToolManager           // Direct access to TodoToolManager for aligner
+	webToolManager   *tool.WebToolManager            // Optional web tools for web scenarios
+	mcpToolManagers  map[string]domain.ToolManager   // MCP tool managers by name
+	fsRepo           repository.FilesystemRepository // Shared filesystem repository instance
 	workingDir       string
 	sharedState      domain.State      // Shared state for all agents
 	scenarios        infra.ScenarioMap // Loaded YAML scenarios
@@ -80,13 +82,17 @@ type ScenarioRunner struct {
 // WorkingDir returns the scenario runner's working directory
 func (s *ScenarioRunner) WorkingDir() string { return s.workingDir }
 
+// FilesystemRepository returns the shared filesystem repository instance
+func (s *ScenarioRunner) FilesystemRepository() repository.FilesystemRepository { return s.fsRepo }
+
 // NewScenarioRunner creates a new ScenarioRunner with MCP tools, settings, and additional scenario paths
 func NewScenarioRunner(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, additionalScenarioPaths ...string) *ScenarioRunner {
-	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, additionalScenarioPaths...)
+	fsRepo := infra.NewOSFilesystemRepository()
+	return NewScenarioRunnerWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo, additionalScenarioPaths...)
 }
 
 // NewScenarioRunnerWithOptions creates a new ScenarioRunner with session control options
-func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, skipSessionRestore bool, isInteractiveMode bool, additionalScenarioPaths ...string) *ScenarioRunner {
+func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, skipSessionRestore bool, isInteractiveMode bool, fsRepo repository.FilesystemRepository, additionalScenarioPaths ...string) *ScenarioRunner {
 	// Create individual managers for universal tool manager
 	// Only create persistent todo manager in interactive mode
 	var todoToolManager *tool.TodoToolManager
@@ -101,7 +107,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	}
 
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
-	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
+	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 
 	bashConfig := tool.BashConfig{
 		WorkingDir:  workingDir,
@@ -176,6 +182,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 		todoToolManager:  todoToolManager,
 		webToolManager:   webToolManager.(*tool.WebToolManager),
 		mcpToolManagers:  mcpToolManagers,
+		fsRepo:           fsRepo,
 		workingDir:       workingDir,
 		sharedState:      sharedState,
 		scenarios:        scenarios,

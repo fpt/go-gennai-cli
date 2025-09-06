@@ -383,15 +383,101 @@ Both Ollama and Anthropic support thinking capabilities:
 - **Console vs File Logs**: Console shows icons inferred from intention; file logs store `intention` as a structured key with no icons.
 - **Model-Facing Outputs**: Tool responses sent back to models avoid emojis and use plain PASS/FAIL/ERROR language.
 
-**Dependency Injection:**
-The architecture uses clean dependency injection with DDD layering:
-- YAML scenario configurations loaded at startup
-- Universal tool manager always created with core capabilities
-- Specialized tool managers created and composed based on scenario requirements
-- LLM clients wrapped with composed tool managers per scenario
-- ScenarioRunner (app layer) manages thinking channels and session persistence
-- ReAct (domain layer) handles execution with injected tool managers
-- No tight coupling between layers
+**Domain-Driven Design (DDD) and Dependency Injection (DI):**
+The architecture follows DDD principles with clean dependency injection for testability and maintainability:
+
+**DDD Layer Separation:**
+- **Domain Layer** (`pkg/agent/domain/`): Core interfaces and business logic (no external dependencies)
+- **Infrastructure Layer** (`internal/infra/`): Concrete implementations of repositories and external services
+- **Application Layer** (`internal/app/`): Business workflows and use case orchestration
+- **Repository Layer** (`internal/repository/`): Data access interface contracts
+
+**Repository Pattern with DI:**
+The system uses the repository pattern to abstract filesystem operations and data persistence:
+
+```go
+// Domain interface (internal/repository/filesystem.go)
+type FilesystemRepository interface {
+    ReadFile(ctx context.Context, path string) ([]byte, error)
+    WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
+    Stat(ctx context.Context, path string) (fs.FileInfo, error)
+    ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
+    // ... other filesystem operations
+}
+
+// Infrastructure implementation (internal/infra/filesystem.go)
+type OSFilesystemRepository struct{}
+
+func NewOSFilesystemRepository() repository.FilesystemRepository {
+    return &OSFilesystemRepository{}
+}
+```
+
+**Constructor Injection Examples:**
+
+**FileSystemToolManager with DI:**
+```go
+type FileSystemToolManager struct {
+    fsRepo repository.FilesystemRepository // Injected dependency
+    allowedDirectories []string
+    workingDir string
+    // ... other fields
+}
+
+func NewFileSystemToolManager(
+    fsRepo repository.FilesystemRepository, 
+    config repository.FileSystemConfig, 
+    workingDir string,
+) *FileSystemToolManager {
+    return &FileSystemToolManager{
+        fsRepo:             fsRepo, // Injected repository
+        allowedDirectories: config.AllowedDirectories,
+        workingDir:         workingDir,
+        // ... initialization
+    }
+}
+```
+
+**PromptBuilder with DI:**
+```go
+type PromptBuilder struct {
+    buf        []rune
+    times      []time.Time
+    workingDir string
+    fsRepo     repository.FilesystemRepository // Injected dependency
+}
+
+func NewPromptBuilder(fsRepo repository.FilesystemRepository, workingDir string) *PromptBuilder {
+    return &PromptBuilder{
+        buf:        make([]rune, 0, 256),
+        times:      make([]time.Time, 0, 256),
+        workingDir: workingDir,
+        fsRepo:     fsRepo, // Injected repository
+    }
+}
+
+// File operations use injected repository
+func (p *PromptBuilder) highlightAtmarkFiles(input string) string {
+    // Uses p.fsRepo.Stat() instead of os.Stat()
+    if _, err := p.fsRepo.Stat(context.Background(), fullPath); err == nil {
+        return fmt.Sprintf("\033[36m@%s\033[0m", filename) // Cyan highlight
+    }
+    return match
+}
+```
+
+**DI Architecture Benefits:**
+- **Testability**: Easy to mock repositories for unit testing
+- **Modularity**: Clear separation between business logic and infrastructure
+- **Flexibility**: Can swap implementations (memory vs filesystem storage)
+- **Context Awareness**: All operations support cancellation via context
+- **YAML scenario configurations loaded at startup**
+- **Universal tool manager always created with core capabilities**  
+- **Specialized tool managers created and composed based on scenario requirements**
+- **LLM clients wrapped with composed tool managers per scenario**
+- **ScenarioRunner (app layer) manages thinking channels and session persistence**
+- **ReAct (domain layer) handles execution with injected tool managers**
+- **No tight coupling between layers**
 
 **Event-Driven Architecture:**
 Clean separation between business logic and presentation concerns:

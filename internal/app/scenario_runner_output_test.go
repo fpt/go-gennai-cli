@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fpt/go-gennai-cli/internal/config"
+	"github.com/fpt/go-gennai-cli/internal/infra"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
@@ -45,7 +46,8 @@ func TestScenarioRunner_OutputWriter_Thinking(t *testing.T) {
 	llm := &mockToolLLM{}
 	settings := config.GetDefaultSettings()
 
-	runner := NewScenarioRunnerWithOptions(llm, ".", map[string]domain.ToolManager{}, settings, logger, &buf, true, true)
+	fsRepo := infra.NewOSFilesystemRepository()
+	runner := NewScenarioRunnerWithOptions(llm, ".", map[string]domain.ToolManager{}, settings, logger, &buf, true, true, fsRepo)
 
 	// Invoke using universal tools path (avoids scenario YAMLs)
 	_, err := runner.InvokeWithOptions(context.Background(), "hello")

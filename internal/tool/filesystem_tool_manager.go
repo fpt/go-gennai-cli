@@ -20,6 +20,9 @@ var errNotInAllowedDirectory = errors.New("file access denied: path is not withi
 
 // FileSystemToolManager provides secure file system operations with safety controls
 type FileSystemToolManager struct {
+	// Filesystem operations
+	fsRepo repository.FilesystemRepository // Injected filesystem repository
+
 	// Access control
 	allowedDirectories []string // Directories where file operations are allowed
 	blacklistedFiles   []string // Files that cannot be read (to prevent secret leaks)
@@ -36,7 +39,7 @@ type FileSystemToolManager struct {
 }
 
 // NewFileSystemToolManager creates a new secure filesystem tool manager
-func NewFileSystemToolManager(config repository.FileSystemConfig, workingDir string) *FileSystemToolManager {
+func NewFileSystemToolManager(fsRepo repository.FilesystemRepository, config repository.FileSystemConfig, workingDir string) *FileSystemToolManager {
 	absWorkingDir, err := filepath.Abs(workingDir)
 	if err != nil {
 		absWorkingDir = workingDir
@@ -46,6 +49,7 @@ func NewFileSystemToolManager(config repository.FileSystemConfig, workingDir str
 	allowedDirs := ensureWorkingDirectoryInAllowedList(config.AllowedDirectories, absWorkingDir)
 
 	manager := &FileSystemToolManager{
+		fsRepo:             fsRepo,
 		allowedDirectories: allowedDirs,
 		blacklistedFiles:   config.BlacklistedFiles,
 		workingDir:         absWorkingDir,
@@ -278,7 +282,7 @@ func (m *FileSystemToolManager) isFileBlacklisted(path string) error {
 }
 
 // validateReadWriteSemantics checks if a write operation is safe based on read timestamps
-func (m *FileSystemToolManager) validateReadWriteSemantics(path string) error {
+func (m *FileSystemToolManager) validateReadWriteSemantics(ctx context.Context, path string) error {
 	m.mu.RLock()
 	lastReadTime, wasRead := m.fileReadTimestamps[path]
 	m.mu.RUnlock()
@@ -288,7 +292,7 @@ func (m *FileSystemToolManager) validateReadWriteSemantics(path string) error {
 	}
 
 	// Check if file was modified since last read
-	fileInfo, err := os.Stat(path)
+	fileInfo, err := m.fsRepo.Stat(ctx, path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to check file modification time: %v", err)
 	}
@@ -331,7 +335,7 @@ func (m *FileSystemToolManager) handleReadFile(ctx context.Context, args message
 	}
 
 	// Perform the read operation
-	content, err := os.ReadFile(path)
+	content, err := m.fsRepo.ReadFile(ctx, path)
 	if err != nil {
 		// Even if read fails, record the attempt for read-write semantics
 		// This allows creating new files after attempting to read them
@@ -377,9 +381,9 @@ func (m *FileSystemToolManager) handleWriteFile(ctx context.Context, args messag
 	}
 
 	// Check if the file exists - only validate read-write semantics for existing files
-	if _, err := os.Stat(path); err == nil {
+	if _, err := m.fsRepo.Stat(ctx, path); err == nil {
 		// File exists - validate read-write semantics
-		if err := m.validateReadWriteSemantics(path); err != nil {
+		if err := m.validateReadWriteSemantics(ctx, path); err != nil {
 			return message.NewToolResultError(err.Error()), nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -395,7 +399,7 @@ func (m *FileSystemToolManager) handleWriteFile(ctx context.Context, args messag
 	}
 
 	// Perform the write operation
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := m.fsRepo.WriteFile(ctx, path, []byte(content), 0644); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
@@ -453,12 +457,12 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 	}
 
 	// Read-write semantics validation
-	if err := m.validateReadWriteSemantics(absPath); err != nil {
+	if err := m.validateReadWriteSemantics(ctx, absPath); err != nil {
 		return message.NewToolResultError(err.Error()), nil
 	}
 
 	// Read the file
-	content, err := os.ReadFile(absPath)
+	content, err := m.fsRepo.ReadFile(ctx, absPath)
 	if err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to read file %s: %v", absPath, err)), nil
 	}
@@ -498,7 +502,7 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 	}
 
 	// Write the modified content back to the file
-	if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+	if err := m.fsRepo.WriteFile(ctx, absPath, []byte(newContent), 0644); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to write file %s: %v", absPath, err)), nil
 	}
 
@@ -542,7 +546,7 @@ func (m *FileSystemToolManager) handleRead(ctx context.Context, args message.Too
 		return message.NewToolResultError(err.Error()), nil
 	}
 
-	contentBytes, err := os.ReadFile(path)
+	contentBytes, err := m.fsRepo.ReadFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			m.recordFileRead(path)
@@ -651,7 +655,7 @@ func (m *FileSystemToolManager) handleLS(ctx context.Context, args message.ToolA
 		}
 	}
 
-	entries, err := os.ReadDir(path)
+	entries, err := m.fsRepo.ReadDir(ctx, path)
 	if err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to read directory: %v", err)), nil
 	}
@@ -813,7 +817,7 @@ func (m *FileSystemToolManager) autoValidateGoFile(ctx context.Context, filePath
 	fileName := filepath.Base(filePath)
 
 	// Check if this looks like a Go project (has .go files)
-	hasGoFiles, err := m.hasGoFilesInDirectory(dir)
+	hasGoFiles, err := m.hasGoFilesInDirectory(ctx, dir)
 	if err != nil || !hasGoFiles {
 		return ""
 	}
@@ -833,8 +837,8 @@ func (m *FileSystemToolManager) autoValidateGoFile(ctx context.Context, filePath
 }
 
 // hasGoFilesInDirectory checks if directory contains .go files
-func (m *FileSystemToolManager) hasGoFilesInDirectory(dir string) (bool, error) {
-	entries, err := os.ReadDir(dir)
+func (m *FileSystemToolManager) hasGoFilesInDirectory(ctx context.Context, dir string) (bool, error) {
+	entries, err := m.fsRepo.ReadDir(ctx, dir)
 	if err != nil {
 		return false, err
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fpt/go-gennai-cli/internal/app"
 	"github.com/fpt/go-gennai-cli/internal/config"
+	"github.com/fpt/go-gennai-cli/internal/infra"
 	"github.com/fpt/go-gennai-cli/internal/mcp"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/client/anthropic"
@@ -213,6 +214,9 @@ func main() {
 		}
 	}
 
+	// Create shared FilesystemRepository instance at application level
+	fsRepo := infra.NewOSFilesystemRepository()
+
 	// Initialize the scenario runner with optional MCP tool manager and additional scenarios
 	var a *app.ScenarioRunner
 	// Skip session restoration for file mode (-f flag) to ensure clean isolated tests
@@ -230,10 +234,10 @@ func main() {
 			mcpToolManagers[serverName] = toolManager
 		}
 
-		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode)
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
 	} else {
 		mcpToolManagers := make(map[string]domain.ToolManager)
-		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode)
+		a = app.NewScenarioRunnerWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
 
 		// Note: SimpleToolManager removed - tools now managed by specialized managers
 	}

@@ -154,7 +154,7 @@ func createScenarioRunner(cfg *config.Config, writer io.Writer) (*app.ScenarioRu
     // Create tool managers
     universalManager := tool.NewCompositeToolManager(
         tool.NewTodoToolManager(todoRepo),
-        tool.NewFileSystemToolManager(cfg.FileSystem),
+        tool.NewFileSystemToolManager(fsRepo, cfg.FileSystem),
         tool.NewBashToolManager(),
     )
     
@@ -240,12 +240,37 @@ func (s *ScenarioRunner) handleApprovalWorkflow(ctx context.Context, reactClient
 - **Auto-Approve**: Bypasses all prompts via `--auto-approve` flag or `GENNAI_AUTO_APPROVE` env var
 - **Non-Interactive**: Auto-approves with logged notifications when running in pipes/scripts
 
-### Repository Pattern
+### Domain-Driven Design (DDD) and Dependency Injection (DI) Pattern
 
-Clean data persistence using repository pattern with interface segregation:
+GENNAI CLI follows Domain-Driven Design principles with clean dependency injection for testability and maintainability:
 
-**Repository Interfaces:**
+**DDD Layer Separation:**
+- **Domain Layer** (`pkg/agent/domain/`): Core interfaces and business logic (no external dependencies)
+- **Infrastructure Layer** (`internal/infra/`): Concrete implementations of repositories and external services
+- **Application Layer** (`internal/app/`): Business workflows and use case orchestration
+- **Repository Layer** (`internal/repository/`): Data access interface contracts
+
+**Repository Pattern with DDD:**
+The system uses the repository pattern to abstract data persistence and filesystem operations:
+
+**Domain Repository Interfaces:**
 ```go
+// Filesystem operations contract
+type FilesystemRepository interface {
+    // File operations
+    ReadFile(ctx context.Context, path string) ([]byte, error)
+    WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
+    Stat(ctx context.Context, path string) (fs.FileInfo, error)
+    
+    // Directory operations
+    ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
+    
+    // File existence and metadata
+    Exists(ctx context.Context, path string) (bool, error)
+    IsDir(ctx context.Context, path string) (bool, error)
+    IsRegular(ctx context.Context, path string) (bool, error)
+}
+
 // Message persistence
 type MessageHistoryRepository interface {
     Load() ([]message.Message, error)
@@ -256,6 +281,128 @@ type MessageHistoryRepository interface {
 type SettingsRepository interface {
     Load() (*Settings, error)
     Save(settings *Settings) error
+}
+```
+
+**Infrastructure Implementations:**
+```go
+// Concrete filesystem repository implementation
+type OSFilesystemRepository struct{}
+
+func NewOSFilesystemRepository() repository.FilesystemRepository {
+    return &OSFilesystemRepository{}
+}
+
+func (r *OSFilesystemRepository) ReadFile(ctx context.Context, path string) ([]byte, error) {
+    return os.ReadFile(path)
+}
+
+func (r *OSFilesystemRepository) WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error {
+    return os.WriteFile(path, data, perm)
+}
+// ... other methods
+```
+
+**Dependency Injection in Application Layer:**
+
+**FileSystemToolManager with DI:**
+```go
+type FileSystemToolManager struct {
+    fsRepo repository.FilesystemRepository // Injected dependency
+    allowedDirectories []string
+    blacklistedFiles   []string
+    workingDir string
+    // ... other fields
+}
+
+// Constructor injection
+func NewFileSystemToolManager(
+    fsRepo repository.FilesystemRepository, 
+    config repository.FileSystemConfig, 
+    workingDir string,
+) *FileSystemToolManager {
+    return &FileSystemToolManager{
+        fsRepo:             fsRepo, // Injected repository
+        allowedDirectories: config.AllowedDirectories,
+        blacklistedFiles:   config.BlacklistedFiles,
+        workingDir:         workingDir,
+        // ... other initialization
+    }
+}
+
+// Use injected repository instead of direct os.* calls
+func (f *FileSystemToolManager) readFile(ctx context.Context, filePath string) ([]byte, error) {
+    return f.fsRepo.ReadFile(ctx, filePath) // Uses injected repository
+}
+```
+
+**PromptBuilder with DI:**
+```go
+type PromptBuilder struct {
+    buf        []rune
+    times      []time.Time
+    workingDir string
+    fsRepo     repository.FilesystemRepository // Injected dependency
+}
+
+// Constructor injection
+func NewPromptBuilder(fsRepo repository.FilesystemRepository, workingDir string) *PromptBuilder {
+    if workingDir == "" {
+        workingDir, _ = os.Getwd()
+    }
+    return &PromptBuilder{
+        buf:        make([]rune, 0, 256),
+        times:      make([]time.Time, 0, 256),
+        workingDir: workingDir,
+        fsRepo:     fsRepo, // Injected repository
+    }
+}
+
+// File existence checks using injected repository
+func (p *PromptBuilder) highlightAtmarkFiles(input string) string {
+    re := regexp.MustCompile(`@([\w\-\./]+)`)
+    return re.ReplaceAllStringFunc(input, func(match string) string {
+        filename := match[1:]
+        fullPath := filepath.Join(p.workingDir, filename)
+        if _, err := p.fsRepo.Stat(context.Background(), fullPath); err == nil {
+            // File exists - color it cyan
+            return fmt.Sprintf("\033[36m@%s\033[0m", filename)
+        }
+        return match
+    })
+}
+```
+
+**DI Benefits:**
+- **Testability**: Easy to mock repositories for unit testing
+- **Modularity**: Clear separation between business logic and infrastructure
+- **Flexibility**: Can swap implementations (e.g., memory vs filesystem storage)
+- **Context Awareness**: All operations support cancellation via context
+
+**Testing with DI:**
+```go
+// Easy mocking for tests
+type MockFilesystemRepository struct {
+    files map[string][]byte
+}
+
+func (m *MockFilesystemRepository) ReadFile(ctx context.Context, path string) ([]byte, error) {
+    if content, exists := m.files[path]; exists {
+        return content, nil
+    }
+    return nil, os.ErrNotExist
+}
+
+// Test with injected mock
+func TestPromptBuilder_FileHighlighting(t *testing.T) {
+    mockRepo := &MockFilesystemRepository{
+        files: map[string][]byte{
+            "/test/existing.go": []byte("package main"),
+        },
+    }
+    
+    pb := NewPromptBuilder(mockRepo, "/test")
+    // Test file highlighting logic...
 }
 ```
 

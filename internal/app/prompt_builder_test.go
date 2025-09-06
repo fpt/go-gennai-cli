@@ -4,10 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fpt/go-gennai-cli/internal/infra"
 )
 
 func TestPromptBuilder_Empty(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	if got := pb.VisiblePrompt(); got != "" {
 		t.Fatalf("VisiblePrompt: want empty, got %q", got)
 	}
@@ -17,7 +20,8 @@ func TestPromptBuilder_Empty(t *testing.T) {
 }
 
 func TestPromptBuilder_InputASCII(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	for _, r := range []rune("Hello, world!") {
 		pb.Input(r)
 		time.Sleep(pasteInterval + time.Millisecond) // simulate human typing
@@ -32,7 +36,8 @@ func TestPromptBuilder_InputASCII(t *testing.T) {
 }
 
 func TestPromptBuilder_InputUnicode(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	input := "こんにちは 世界🌟"
 	for _, r := range []rune(input) {
 		pb.Input(r)
@@ -47,7 +52,8 @@ func TestPromptBuilder_InputUnicode(t *testing.T) {
 }
 
 func TestPromptBuilder_AppendAfterRead(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	for _, r := range []rune("ABC") {
 		pb.Input(r)
 		time.Sleep(pasteInterval + time.Millisecond)
@@ -66,7 +72,8 @@ func TestPromptBuilder_AppendAfterRead(t *testing.T) {
 }
 
 func TestPromptBuilder_PasteDetectionVisibleDiff(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	// First a slow rune
 	pb.Input('H')
 	time.Sleep(pasteInterval + time.Millisecond)
@@ -87,7 +94,8 @@ func TestPromptBuilder_PasteDetectionVisibleDiff(t *testing.T) {
 }
 
 func TestPromptBuilder_BackspaceDeletesWholePasteBlock(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	// Slow first char
 	pb.Input('H')
 	// Simulate a clear pause before paste so first char is not part of paste
@@ -114,7 +122,8 @@ func TestPromptBuilder_BackspaceDeletesWholePasteBlock(t *testing.T) {
 }
 
 func TestPromptBuilder_VisiblePromptSanitizesNewlines(t *testing.T) {
-	pb := NewPromptBuilder()
+	fsRepo := infra.NewOSFilesystemRepository()
+	pb := NewPromptBuilder(fsRepo, "")
 	pb.Input('A')
 	time.Sleep(pasteInterval + time.Millisecond)
 	pb.Input('\n')

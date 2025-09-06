@@ -6,8 +6,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 
@@ -165,7 +163,7 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 	contextDisplay := NewContextDisplay()
 
 	// Use a long-lived PromptBuilder for this readline session
-	pb := NewPromptBuilder()
+	pb := NewPromptBuilder(a.FilesystemRepository(), a.WorkingDir())
 
 	rlCfg := &readline.Config{
 		Prompt:                 "> ",
@@ -292,14 +290,8 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 		// Use builder-captured view for display (may compress pastes)
 		userInput := pb.VisiblePrompt()
 
-		// If the input ends with an atmark token (e.g., "@" or "@partial"),
-		// open a file selector to pick a path and substitute it.
-		if strings.Contains(userInput, "@") {
-			if replaced, ok := maybeSelectFileForAtmark(userInput, a); ok {
-				userInput = replaced
-				fmt.Printf("📎 Inserted file after '@': %s\n", userInput)
-			}
-		}
+		// @filename processing is now handled automatically by PromptBuilder
+		// VisiblePrompt shows highlights, RawPrompt embeds file content
 
 		if userInput == "" {
 			continue
@@ -350,101 +342,6 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 
 		// No placeholder state to reset
 	}
-}
-
-// maybeSelectFileForAtmark detects a trailing atmark token and lets the user select a file.
-// Returns the updated input and true when a substitution occurred.
-func maybeSelectFileForAtmark(input string, a *ScenarioRunner) (string, bool) {
-	re := regexp.MustCompile(`(?s)^(.*?)(?:\s|^)(@([\w\-\./]*))$`)
-	m := re.FindStringSubmatch(input)
-	if len(m) == 0 {
-		return input, false
-	}
-	prefix := m[1]
-	partial := m[3]
-
-	base := a.WorkingDir()
-	files := collectFiles(base, 800)
-	if len(files) == 0 {
-		return input, false
-	}
-
-	templates := &promptui.SelectTemplates{
-		Label:    "{{ . }}",
-		Active:   "▸ {{ . | cyan }}",
-		Inactive: "  {{ . }}",
-		Selected: "{{ . | cyan }}",
-	}
-	startIdx := 0
-	if partial != "" {
-		lp := strings.ToLower(partial)
-		for i, f := range files {
-			if strings.HasPrefix(strings.ToLower(f), lp) {
-				startIdx = i
-				break
-			}
-		}
-	}
-	searcher := func(in string, idx int) bool {
-		name := strings.ToLower(files[idx])
-		in = strings.ToLower(strings.ReplaceAll(in, " ", ""))
-		return strings.Contains(name, in)
-	}
-	sel := promptui.Select{
-		Label:     "Select file to insert after '@'",
-		Items:     files,
-		Templates: templates,
-		Size:      12,
-		CursorPos: startIdx,
-		Searcher:  searcher,
-	}
-	i, _, err := sel.Run()
-	if err != nil {
-		return input, false
-	}
-	chosen := files[i]
-	updated := strings.TrimSpace(prefix) + " "
-	if prefix == "" || strings.HasSuffix(prefix, " ") {
-		updated = prefix
-	}
-	updated += "@" + chosen
-	return updated, true
-}
-
-// collectFiles returns a list of relative file paths under baseDir (non-hidden directories).
-func collectFiles(baseDir string, limit int) []string {
-	if baseDir == "" {
-		baseDir, _ = os.Getwd()
-	}
-	var files []string
-	_ = filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == ".git" {
-				if path != baseDir {
-					return filepath.SkipDir
-				}
-			}
-			return nil
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		rel, err := filepath.Rel(baseDir, path)
-		if err != nil {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		files = append(files, rel)
-		if limit > 0 && len(files) >= limit {
-			return io.EOF
-		}
-		return nil
-	})
-	return files
 }
 
 // createAutoCompleter creates an autocompletion function for readline

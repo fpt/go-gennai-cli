@@ -72,7 +72,8 @@ func TestScenarioBasedToolSelection(t *testing.T) {
 	// Create universal tool manager components
 	todoManager := tool.NewTodoToolManager(workingDir)
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
-	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 	bashConfig := tool.BashConfig{WorkingDir: workingDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)
 
@@ -173,7 +174,8 @@ func TestCompositeToolManager(t *testing.T) {
 	testWorkDir := "/tmp/gennai-composite-test"
 	todoManager := tool.NewTodoToolManager(testWorkDir)
 	fsConfig := infra.DefaultFileSystemConfig(".")
-	fsManager := tool.NewFileSystemToolManager(fsConfig, testWorkDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	fsManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, testWorkDir)
 	bashConfig := tool.BashConfig{WorkingDir: testWorkDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)
 

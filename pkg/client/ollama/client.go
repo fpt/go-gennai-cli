@@ -1,14 +1,14 @@
 package ollama
 
 import (
-    "context"
-    "fmt"
-    "strings"
+	"context"
+	"fmt"
+	"strings"
 
-    "github.com/fpt/go-gennai-cli/pkg/agent/domain"
-    "github.com/fpt/go-gennai-cli/pkg/message"
-    "github.com/ollama/ollama/api"
-    "github.com/pkg/errors"
+	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
+	"github.com/fpt/go-gennai-cli/pkg/message"
+	"github.com/ollama/ollama/api"
+	"github.com/pkg/errors"
 )
 
 const temperature = 0.1 // Default temperature for Ollama chat requests
@@ -75,14 +75,14 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 			contentBuilder.WriteString(resp.Message.Content)
 		}
 
-        if resp.Message.Thinking != "" {
-            // Send thinking content to channel if enabled
-            if shouldShowThinking(c.thinking, chatRequest.Think) && thinkingChan != nil {
-                message.SendThinkingContent(thinkingChan, resp.Message.Thinking)
-            }
+		if resp.Message.Thinking != "" {
+			// Send thinking content to channel if enabled
+			if shouldShowThinking(c.thinking, chatRequest.Think) && thinkingChan != nil {
+				message.SendThinkingContent(thinkingChan, resp.Message.Thinking)
+			}
 
-            thinkingBuilder.WriteString(resp.Message.Thinking)
-        }
+			thinkingBuilder.WriteString(resp.Message.Thinking)
+		}
 
 		if resp.Done {
 			// Signal end of thinking if we accumulated thinking content
@@ -121,12 +121,12 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 
 // shouldShowThinking determines if thinking should be displayed based on settings and request parameters
 func shouldShowThinking(settingsThinking bool, requestThink *api.ThinkValue) bool {
-    if requestThink != nil {
-        // Explicit parameter takes precedence (from ChatWithThinking)
-        return requestThink.Bool()
-    }
-    // Use settings-based thinking control (from Chat)
-    return settingsThinking
+	if requestThink != nil {
+		// Explicit parameter takes precedence (from ChatWithThinking)
+		return requestThink.Bool()
+	}
+	// Use settings-based thinking control (from Chat)
+	return settingsThinking
 }
 
 // OllamaClient implements tool calling and thinking capabilities for Ollama
@@ -273,15 +273,15 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 	}
 
 	// Set thinking parameter if supported
-    if IsThinkingCapableModel(c.model) {
-        if enableThinking != nil {
-            // Use provided thinking setting (from ChatWithThinking)
-            chatRequest.Think = &api.ThinkValue{Value: *enableThinking}
-        } else {
-            // Use settings-based thinking control (from Chat)
-            chatRequest.Think = &api.ThinkValue{Value: c.thinking}
-        }
-    }
+	if IsThinkingCapableModel(c.model) {
+		if enableThinking != nil {
+			// Use provided thinking setting (from ChatWithThinking)
+			chatRequest.Think = &api.ThinkValue{Value: *enableThinking}
+		} else {
+			// Use settings-based thinking control (from Chat)
+			chatRequest.Think = &api.ThinkValue{Value: c.thinking}
+		}
+	}
 
 	// Add tools if this is a tool-capable model and tool manager is available
 	if c.IsToolCapable() && c.toolManager != nil {

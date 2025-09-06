@@ -51,7 +51,8 @@ func TestInvokeWithScenario(t *testing.T) {
 	workingDir := "/tmp/test"
 	todoManager := tool.NewTodoToolManager(workingDir)
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
-	filesystemManager := tool.NewFileSystemToolManager(fsConfig, workingDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 	bashConfig := tool.BashConfig{WorkingDir: workingDir, MaxDuration: 120 * time.Second}
 	bashManager := tool.NewBashToolManager(bashConfig)
 	universalManager := tool.NewCompositeToolManager(todoManager, filesystemManager, bashManager)

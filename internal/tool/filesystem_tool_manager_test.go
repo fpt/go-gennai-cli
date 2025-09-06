@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fpt/go-gennai-cli/internal/infra"
 	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 	"github.com/pkg/errors"
@@ -53,7 +54,8 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 		BlacklistedFiles:   []string{"*.env", "*secret*"},
 	}
 
-	manager := NewFileSystemToolManager(config, workingDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	manager := NewFileSystemToolManager(fsRepo, config, workingDir)
 	ctx := context.Background()
 
 	t.Run("AllowedDirectoryAccess", func(t *testing.T) {
@@ -246,7 +248,8 @@ func TestFileSystemToolManager_ToolRegistration(t *testing.T) {
 		BlacklistedFiles:   []string{},
 	}
 
-	manager := NewFileSystemToolManager(config, tempDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	manager := NewFileSystemToolManager(fsRepo, config, tempDir)
 
 	// Verify expected tools
 	expectedTools := []string{
@@ -281,7 +284,8 @@ func TestFileSystemToolManager_ResolvePath(t *testing.T) {
 	config := repository.FileSystemConfig{
 		AllowedDirectories: []string{tempDir},
 	}
-	manager := NewFileSystemToolManager(config, tempDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	manager := NewFileSystemToolManager(fsRepo, config, tempDir)
 
 	tests := []struct {
 		name        string
@@ -521,7 +525,8 @@ func TestFileSystemToolManager_IsPathAllowed(t *testing.T) {
 		BlacklistedFiles:   []string{},
 	}
 	// Use a different working directory to test the allowlist logic specifically
-	manager := NewFileSystemToolManager(config, allowedDir)
+	fsRepo := infra.NewOSFilesystemRepository()
+	manager := NewFileSystemToolManager(fsRepo, config, allowedDir)
 
 	t.Run("allowed_path_should_pass", func(t *testing.T) {
 		allowedFile := filepath.Join(allowedDir, "test.txt")
