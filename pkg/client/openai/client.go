@@ -117,7 +117,7 @@ func (c *OpenAIClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions
 // Chat implements the basic LLM interface with thinking control
 func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Also respect cached fallback state from previous attempts
-	if c.OpenAICore != nil && c.OpenAICore.streamingUnsupported {
+	if c.OpenAICore != nil && c.streamingUnsupported {
 		enableThinking = false
 	}
 
@@ -343,10 +343,10 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 		if isStreamingUnsupportedError(stream.Err()) {
 			// Cache the failure and avoid streaming for the rest of the session
 			if c.OpenAICore != nil {
-				if !c.OpenAICore.streamingUnsupported {
+				if !c.streamingUnsupported {
 					fmt.Fprintln(os.Stderr, "OpenAI: streaming not permitted; falling back to non-streaming.")
 				}
-				c.OpenAICore.streamingUnsupported = true
+				c.streamingUnsupported = true
 			}
 			// Perform the same request without streaming
 			resp, err := c.client.Responses.New(ctx, params)

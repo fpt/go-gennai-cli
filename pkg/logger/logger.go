@@ -74,14 +74,14 @@ func NewDebugLogger() *Logger {
 // WithComponent creates a logger with a component context for better tracing
 func (l *Logger) WithComponent(component string) *Logger {
 	return &Logger{
-		Logger: l.Logger.With("component", component),
+		Logger: l.With("component", component),
 	}
 }
 
 // WithSession creates a logger with session context for request tracing
 func (l *Logger) WithSession(sessionID string) *Logger {
 	return &Logger{
-		Logger: l.Logger.With("session", sessionID),
+		Logger: l.With("session", sessionID),
 	}
 }
 
@@ -91,7 +91,7 @@ func (l *Logger) LogWithIntention(level slog.Level, intention Intention, msg str
 	// Do not modify message for file logs; console handler adds icon.
 	// Attach intention as structured attribute for files/consumers
 	kv := append([]any{"intention", string(intention)}, args...)
-	l.Logger.Log(context.Background(), level, msg, kv...)
+	l.Log(context.Background(), level, msg, kv...)
 }
 
 func (l *Logger) InfoWithIntention(intention Intention, msg string, args ...any) {
