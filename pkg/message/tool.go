@@ -52,4 +52,8 @@ type ToolArgument struct {
 	Description ToolDescription
 	Required    bool
 	Type        string
+	// Properties defines schema for complex types (objects, arrays)
+	// For arrays: Properties["items"] = schema for array items
+	// For objects: Properties contains property definitions
+	Properties map[string]any `json:"properties,omitempty"`
 }

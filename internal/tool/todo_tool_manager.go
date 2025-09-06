@@ -5,36 +5,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/fpt/go-gennai-cli/internal/config"
+	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/pkg/message"
 )
 
-// TodoItem represents a single todo item
-type TodoItem struct {
-	ID       string `json:"id"`
-	Content  string `json:"content"`
-	Status   string `json:"status"`   // pending, in_progress, completed (compat: accepts 'done')
-	Priority string `json:"priority"` // high, medium, low
-	Created  string `json:"created"`
-	Updated  string `json:"updated"`
-}
-
-// TodoState represents the current state of all todos
-type TodoState struct {
-	Items    []TodoItem `json:"items"`
-	Updated  string     `json:"updated"`
-	mu       sync.RWMutex
-	filePath string
-}
+// Type aliases for convenience
+type TodoItem = repository.TodoItem
 
 // TodoToolManager provides task management capabilities
 type TodoToolManager struct {
-	tools     map[message.ToolName]message.Tool
-	todoState *TodoState
+	tools          map[message.ToolName]message.Tool
+	todoRepository repository.TodoRepository
+}
+
+// NewTodoToolManagerWithRepository creates a new todo tool manager with injected repository
+func NewTodoToolManagerWithRepository(repo repository.TodoRepository) *TodoToolManager {
+	manager := &TodoToolManager{
+		tools:          make(map[message.ToolName]message.Tool),
+		todoRepository: repo,
+	}
+
+	// Load existing todos
+	_ = repo.Load()
+
+	// Register todo tools
+	manager.registerTodoTools()
+
+	// Register task tools
+	manager.registerTaskTools()
+
+	return manager
 }
 
 // NewTodoToolManager creates a new todo tool manager using user config
@@ -55,50 +58,24 @@ func NewTodoToolManager(projectPath string) *TodoToolManager {
 		os.Exit(1)
 	}
 
-	return NewTodoToolManagerWithPath(todoFilePath)
+	// Create file-based repository and inject it
+	repo := repository.NewFileTodoRepository(todoFilePath)
+
+	return NewTodoToolManagerWithRepository(repo)
 }
 
 // NewTodoToolManagerWithPath creates a new todo tool manager with a specific file path
 func NewTodoToolManagerWithPath(todoFilePath string) *TodoToolManager {
-	manager := &TodoToolManager{
-		tools: make(map[message.ToolName]message.Tool),
-		todoState: &TodoState{
-			Items:    make([]TodoItem, 0),
-			filePath: todoFilePath,
-		},
-	}
+	repo := repository.NewFileTodoRepository(todoFilePath)
 
-	// Load existing todos
-	_ = manager.todoState.loadFromFile()
-
-	// Register todo tools
-	manager.registerTodoTools()
-
-	// Register task tools
-	manager.registerTaskTools()
-
-	return manager
+	return NewTodoToolManagerWithRepository(repo)
 }
 
 // NewInMemoryTodoToolManager creates a new todo tool manager that only stores data in memory (no persistence)
 func NewInMemoryTodoToolManager() *TodoToolManager {
-	manager := &TodoToolManager{
-		tools: make(map[message.ToolName]message.Tool),
-		todoState: &TodoState{
-			Items:    make([]TodoItem, 0),
-			filePath: "", // Empty path means no persistence
-		},
-	}
+	repo := repository.NewInMemoryTodoRepository()
 
-	// No file loading for in-memory manager
-
-	// Register todo tools
-	manager.registerTodoTools()
-
-	// Register task tools
-	manager.registerTaskTools()
-
-	return manager
+	return NewTodoToolManagerWithRepository(repo)
 }
 
 // Implement domain.ToolManager interface
@@ -133,12 +110,11 @@ func (m *TodoToolManager) RegisterTool(name message.ToolName, description messag
 
 // IsAllCompleted reports whether there are todos and all of them are completed
 func (m *TodoToolManager) IsAllCompleted() bool {
-	m.todoState.mu.RLock()
-	defer m.todoState.mu.RUnlock()
-	if len(m.todoState.Items) == 0 {
+	items := m.todoRepository.GetItems()
+	if len(items) == 0 {
 		return false
 	}
-	for _, it := range m.todoState.Items {
+	for _, it := range items {
 		st := it.Status
 		if st == "done" {
 			st = "completed"
@@ -284,16 +260,12 @@ func (m *TodoToolManager) handleTodoWrite(ctx context.Context, args message.Tool
 		return message.NewToolResultError("Only one todo may be 'in_progress' at a time. Please adjust statuses and try again."), nil
 	}
 
-	// Update todo state
-	m.todoState.mu.Lock()
-	defer m.todoState.mu.Unlock()
+	// Update todo repository
+	m.todoRepository.SetItems(todoItems)
+	m.todoRepository.SetUpdated(time.Now().Format(time.RFC3339))
 
-	// Replace all todos with new list
-	m.todoState.Items = todoItems
-	m.todoState.Updated = time.Now().Format(time.RFC3339)
-
-	// Save to file
-	if err := m.todoState.saveToFile(); err != nil {
+	// Save to repository
+	if err := m.todoRepository.Save(); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to save todos: %v", err)), nil
 	}
 
@@ -317,16 +289,14 @@ func (m *TodoToolManager) handleTodoWrite(ctx context.Context, args message.Tool
 
 // GetTodosForPrompt returns formatted todos for injection into prompt context
 func (m *TodoToolManager) GetTodosForPrompt() string {
-	m.todoState.mu.RLock()
-	defer m.todoState.mu.RUnlock()
-
-	if len(m.todoState.Items) == 0 {
+	items := m.todoRepository.GetItems()
+	if len(items) == 0 {
 		return ""
 	}
 
 	// Format todos for prompt injection
 	var result string
-	result += fmt.Sprintf("Current Todo List (%d items):\n\n", len(m.todoState.Items))
+	result += fmt.Sprintf("Current Todo List (%d items):\n\n", len(items))
 
 	// Group by status for better readability (normalize legacy 'done' → 'completed')
 	statusGroups := map[string][]TodoItem{
@@ -335,7 +305,7 @@ func (m *TodoToolManager) GetTodosForPrompt() string {
 		"completed":   {},
 	}
 
-	for _, item := range m.todoState.Items {
+	for _, item := range items {
 		status := item.Status
 		if status == "done" {
 			status = "completed"
@@ -363,56 +333,9 @@ func (m *TodoToolManager) GetTodosForPrompt() string {
 		result += "\n"
 	}
 
-	result += fmt.Sprintf("Last updated: %s", m.todoState.Updated)
+	result += fmt.Sprintf("Last updated: %s", m.todoRepository.GetUpdated())
 
 	return result
-}
-
-// File persistence methods
-func (ts *TodoState) loadFromFile() error {
-	if ts.filePath == "" {
-		return fmt.Errorf("no file path specified")
-	}
-
-	data, err := os.ReadFile(ts.filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist yet, start with empty state
-			return nil
-		}
-		return err
-	}
-
-	if err := json.Unmarshal(data, ts); err != nil {
-		return err
-	}
-	// Normalize legacy statuses on load
-	for i := range ts.Items {
-		if ts.Items[i].Status == "done" {
-			ts.Items[i].Status = "completed"
-		}
-	}
-	return nil
-}
-
-func (ts *TodoState) saveToFile() error {
-	if ts.filePath == "" {
-		// In-memory mode - no persistence, silently skip saving
-		return nil
-	}
-
-	data, err := json.MarshalIndent(ts, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(ts.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(ts.filePath, data, 0644)
 }
 
 // todoTool is a helper struct for todo tool registration

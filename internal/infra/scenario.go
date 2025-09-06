@@ -259,11 +259,6 @@ func LoadScenarios(additionalPaths ...string) (ScenarioMap, error) {
 	return scenarios, nil
 }
 
-// LoadLegacyScenarios loads scenarios from a directory path (backward compatibility)
-func LoadLegacyScenarios(scenarioDir string) (ScenarioMap, error) {
-	return LoadScenariosFromPath(scenarioDir)
-}
-
 // ScenarioMap represents all scenarios loaded from YAML files
 type ScenarioMap map[string]repository.Scenario
 

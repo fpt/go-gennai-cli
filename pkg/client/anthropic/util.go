@@ -199,6 +199,15 @@ func convertArgumentToAnthropicProperty(arg message.ToolArgument) map[string]any
 	// Example: "Array of todo items with content, status, priority, and id. maxItems:5"
 	desc := arg.Description.String()
 
+	// Use explicit properties if available
+	if len(arg.Properties) > 0 {
+		// Merge explicit properties with the base property
+		for k, v := range arg.Properties {
+			property[k] = v
+		}
+		return property
+	}
+
 	// Parse enhanced schema information from description
 	if arg.Type == "array" {
 		// For array types, try to infer item schema from context

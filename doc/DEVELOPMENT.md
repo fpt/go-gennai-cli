@@ -22,13 +22,15 @@ This document provides detailed information for developers working on GENNAI CLI
 
 ### Key Components
 
-- **ScenarioRunner**: Main orchestrator managing scenario-based ReAct execution
-- **ReAct**: Core reasoning and acting implementation with unified tool calling
+- **ScenarioRunner**: Main orchestrator managing scenario-based ReAct execution with event handling
+- **ReAct**: Core reasoning and acting implementation with unified tool calling and event emission
 - **ClientWithTool**: Automatic wrapper that detects and handles native vs text-based tool calling
+- **Event System**: Event-driven architecture separating business logic from presentation
+- **Tool Approval System**: Interactive approval workflow for destructive file operations
 - **LLM Clients**: Pluggable backend support (Ollama, Anthropic, OpenAI, Gemini) with capability-based design
-- **Client Factory**: LLM client creation and configuration
-- **Tool Manager**: Handles tool registration and execution
-- **Message State**: Manages conversation history and context
+- **Client Factory**: LLM client creation and configuration using dependency injection
+- **Tool Manager**: Handles tool registration and execution with security controls
+- **Message State**: Manages conversation history and context with repository pattern
 - **Interactive REPL**: Continuous conversation interface with built-in commands
 
 ### Scenario-Based ReAct Workflow
@@ -102,6 +104,180 @@ Current status:
 
 Reference for provider-side caching:
 - OpenAI Prompt Caching: https://platform.openai.com/docs/guides/prompt-caching
+
+## Architecture Patterns
+
+### Event-Driven Architecture
+
+GENNAI uses a clean event-driven architecture that separates business logic from presentation:
+
+**Agent Layer (Event Emission):**
+```go
+// ReAct agent emits events without formatting concerns
+r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+    ToolName:  string(toolCall.ToolName()),
+    Arguments: r.summarizeToolArgs(toolCall.ToolArguments()),
+})
+```
+
+**App Layer (Event Handling):**
+```go
+// App layer handles formatting and output
+emitter.AddHandler(func(event events.AgentEvent) {
+    writer := s.OutWriter()
+    switch event.Type {
+    case events.EventTypeToolCallStart:
+        if data, ok := event.Data.(events.ToolCallStartData); ok {
+            fmt.Fprintf(writer, "🔧 Running tool %s %v\n", data.ToolName, data.Arguments)
+        }
+    case events.EventTypeToolResult:
+        // Handle tool results with proper formatting
+    }
+})
+```
+
+**Event Types:**
+- `EventTypeThinkingChunk` - Streaming thinking content during reasoning
+- `EventTypeToolCallStart` - Tool execution begins (with tool name and args)
+- `EventTypeToolResult` - Tool execution complete (with results or errors)
+- `EventTypeResponse` - Final agent response when conversation completes
+- `EventTypeError` - Error conditions during execution
+
+### Dependency Injection Pattern
+
+The system uses constructor injection for clean testability and modularity:
+
+**ScenarioRunner Construction:**
+```go
+// Clean dependency injection in main.go
+func createScenarioRunner(cfg *config.Config, writer io.Writer) (*app.ScenarioRunner, error) {
+    // Create tool managers
+    universalManager := tool.NewCompositeToolManager(
+        tool.NewTodoToolManager(todoRepo),
+        tool.NewFileSystemToolManager(cfg.FileSystem),
+        tool.NewBashToolManager(),
+    )
+    
+    // Create scenario runner with injected dependencies
+    return app.NewScenarioRunner(
+        writer,           // Output destination
+        cfg,              // Configuration
+        universalManager, // Universal tools
+        webToolManager,   // Web tools
+        mcpManagers,      // MCP tool managers
+    ), nil
+}
+```
+
+**ReAct Agent Construction:**
+```go
+// ReAct agent with injected dependencies
+func NewReAct(
+    llmClient domain.LLM,
+    toolManager domain.ToolManager, 
+    state domain.State,
+    aligner domain.MessageAligner,
+    maxIterations int,
+    eventEmitter events.EventEmitter, // Event system injection
+) *ReAct {
+    return &ReAct{
+        llmClient:     llmClient,
+        toolManager:   toolManager,
+        state:        state,
+        aligner:      aligner,
+        maxIterations: maxIterations,
+        eventEmitter:  eventEmitter,
+    }
+}
+```
+
+### Tool Approval System
+
+Interactive approval workflow for potentially destructive operations:
+
+**Approval Logic in ReAct:**
+```go
+// Check if tool requires approval
+if toolCall, ok := resp.(*message.ToolCallMessage); ok {
+    toolName := string(toolCall.ToolName())
+    
+    // Only require approval for potentially destructive file operations
+    requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+    
+    if requiresApproval && !autoApprove {
+        r.pendingToolCall = toolCall
+        r.status = domain.AgentStatusWaitingApproval
+        return nil, react.ErrWaitingForApproval
+    }
+}
+```
+
+**Approval Workflow in App Layer:**
+```go
+func (s *ScenarioRunner) handleApprovalWorkflow(ctx context.Context, reactClient domain.ReAct) (message.Message, error) {
+    // Check for auto-approve flag
+    if s.alwaysApprove {
+        return reactClient.Resume(ctx)
+    }
+    
+    // Interactive approval with Yes/Always/No options
+    result, err := s.promptForApproval(pendingAction)
+    switch result {
+    case "Always":
+        s.alwaysApprove = true // Set session flag
+        fallthrough
+    case "Yes":
+        return reactClient.Resume(ctx)
+    case "No":
+        reactClient.CancelPendingToolCall()
+        return nil, nil
+    }
+}
+```
+
+**Approval Modes:**
+- **Interactive**: Prompts user with Yes/Always/No options using promptui
+- **Auto-Approve**: Bypasses all prompts via `--auto-approve` flag or `GENNAI_AUTO_APPROVE` env var
+- **Non-Interactive**: Auto-approves with logged notifications when running in pipes/scripts
+
+### Repository Pattern
+
+Clean data persistence using repository pattern with interface segregation:
+
+**Repository Interfaces:**
+```go
+// Message persistence
+type MessageHistoryRepository interface {
+    Load() ([]message.Message, error)
+    Save(messages []message.Message) error
+}
+
+// Settings persistence  
+type SettingsRepository interface {
+    Load() (*Settings, error)
+    Save(settings *Settings) error
+}
+```
+
+**MessageState with Repository:**
+```go
+// MessageState uses repository for persistence
+func NewMessageStateWithRepository(repo repository.MessageHistoryRepository) *MessageState {
+    return &MessageState{
+        Messages:    make([]message.Message, 0),
+        Metadata:    make(map[string]interface{}),
+        historyRepo: repo, // Injected repository
+    }
+}
+
+// Clean interface - no file paths needed
+func (s *MessageState) SaveToFile() error {
+    if s.historyRepo == nil {
+        return nil // In-memory only
+    }
+    return s.historyRepo.Save(s.Messages)
+}
+```
 
 ## Tool Calling Support
 

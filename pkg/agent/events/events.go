@@ -10,12 +10,12 @@ import (
 type EventType string
 
 const (
-	EventTypeThinkingChunk  EventType = "thinking_chunk"
-	EventTypeToolCallStart  EventType = "tool_call_start"
-	EventTypeToolCallEnd    EventType = "tool_call_end"
-	EventTypeToolResult     EventType = "tool_result"
-	EventTypeResponse       EventType = "response"
-	EventTypeError          EventType = "error"
+	EventTypeThinkingChunk EventType = "thinking_chunk"
+	EventTypeToolCallStart EventType = "tool_call_start"
+	EventTypeToolCallEnd   EventType = "tool_call_end"
+	EventTypeToolResult    EventType = "tool_result"
+	EventTypeResponse      EventType = "response"
+	EventTypeError         EventType = "error"
 )
 
 // AgentEvent represents a structured event from the agent
@@ -40,9 +40,9 @@ type ThinkingChunkData struct {
 
 // ToolCallStartData contains information about a tool call starting
 type ToolCallStartData struct {
-	ToolName  string                        `json:"tool_name"`
-	Arguments message.ToolArgumentValues   `json:"arguments"`
-	CallID    string                       `json:"call_id,omitempty"`
+	ToolName  string                     `json:"tool_name"`
+	Arguments message.ToolArgumentValues `json:"arguments"`
+	CallID    string                     `json:"call_id,omitempty"`
 }
 
 // ToolCallEndData contains information about a tool call completing
@@ -70,7 +70,6 @@ type ErrorData struct {
 	Error   error  `json:"error"`
 	Context string `json:"context,omitempty"`
 }
-
 
 // EventHandler is a function that processes agent events
 type EventHandler func(event AgentEvent)
@@ -101,7 +100,7 @@ func (e *SimpleEventEmitter) EmitEvent(eventType EventType, data interface{}) {
 		Timestamp: time.Now(),
 		Data:      data,
 	}
-	
+
 	for _, handler := range e.handlers {
 		handler(event)
 	}

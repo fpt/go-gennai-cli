@@ -4,7 +4,7 @@ A CLI-based AI coding agent supporting multiple LLM backends, using ReAct (Reaso
 
 Default scenario focuses on coding tasks with ToDo management, various built-in tools, and user-configured tools via MCP client functionality.
 
-The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan. In my opinion, ReAct agent acts like Karakuri.
+The name, GENNAI (pronounces Gen-Nai) comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan. Also it reflects that ReAct agent acts like Karakuri in my opinion.
 
 ## Features
 
@@ -12,7 +12,9 @@ The name, GENNAI comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a his
 - **Multiple LLM Backends**: Support for Ollama (gpt-oss), Anthropic Claude, OpenAI GPT, and Google Gemini (Experimental)
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for better performance
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
+- **Smart Tool Approval**: Interactive approval system for potentially destructive operations (Write, Edit, MultiEdit)
 - **MCP Server Support**: MCP Servers can be configured in settings.json
+- **Event-Driven Architecture**: Clean separation between agent logic and output formatting via events
 - **Conversation State Management**: Automatic handling of conversation history and context
 - **Token Usage & Caching Foundations**: Per‑client token usage reporting (OpenAI supported) and provider‑native caching hints (session/prompt caching)
 - **Clean Output System**: ScenarioRunner streams thinking to an injected `io.Writer`; logs use Info/Debug intentions for console icons while file logs store structured `intention` fields.
@@ -51,6 +53,9 @@ go run gennai/main.go
 
 # Interactive with Anthropic Claude
 go run gennai/main.go -b anthropic
+
+# Interactive with approval bypass (always approve file operations)
+go run gennai/main.go --auto-approve
 ```
 
 **One-shot Mode:**
@@ -65,6 +70,9 @@ go run gennai/main.go -b gemini -m gemini-2.5-flash-lite "Optimize this code"
 
 # Work in specific directory
 go run gennai/main.go -workdir testbench "Create a simple web server"
+
+# One-shot with auto-approval (for scripts/automation)
+go run gennai/main.go --auto-approve "Refactor this code and fix any issues"
 ```
 
 ### Build and Install
@@ -76,6 +84,50 @@ go build -o gennai ./gennai
 # Run the binary
 ./gennai "Your task description here"
 ```
+
+## Tool Approval System
+
+GENNAI includes a smart approval system that prompts for confirmation before executing potentially destructive file operations, providing safety while maintaining workflow efficiency.
+
+### How Tool Approval Works
+
+**Automatic Approval (Safe Operations):**
+- Read operations (viewing files, listing directories)
+- Search and analysis tools (grep, code analysis)
+- Non-destructive tools (todo management, web search)
+
+**Interactive Approval (Destructive Operations):**
+- `Write` - Creating new files or overwriting existing ones
+- `Edit` - Modifying existing files with string replacement
+- `MultiEdit` - Batch editing operations across multiple files
+
+**Approval Options:**
+- **Yes** - Approve this operation only
+- **Always** - Approve this operation and auto-approve all future file operations in this session
+- **No** - Cancel the operation and continue conversation
+
+### Approval Modes
+
+**Interactive Mode (Default):**
+```bash
+📝 About to write file(s):
+📋 Write to /path/to/file.go: Creating main HTTP server...
+
+? Approve this file operation? (Yes/Always/No)
+```
+
+**Auto-Approval Mode:**
+```bash
+# Skip all approval prompts (useful for automation/scripts)
+go run gennai/main.go --auto-approve "Refactor all Go files in this project"
+
+# Or set via environment variable
+export GENNAI_AUTO_APPROVE=true
+go run gennai/main.go "Create and update multiple configuration files"
+```
+
+**Non-Interactive Mode:**
+When running in non-interactive environments (pipes, scripts), operations are automatically approved with logged notifications.
 
 ## Configuration
 

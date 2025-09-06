@@ -15,9 +15,9 @@ var logger = pkgLogger.NewComponentLogger("state-manager")
 
 // Standard compaction strategy - universal values for all models
 const (
-	CompactAtPercent    = 0.70  // Trigger compaction at 70% of context window
-	TargetAfterPercent  = 0.35  // Compact down to 35% of context window
-	MinReductionTokens  = 5000  // Must save at least 5K tokens to be worthwhile
+	CompactAtPercent   = 0.70 // Trigger compaction at 70% of context window
+	TargetAfterPercent = 0.35 // Compact down to 35% of context window
+	MinReductionTokens = 5000 // Must save at least 5K tokens to be worthwhile
 )
 
 // CleanupMandatory performs mandatory cleanup without compaction
@@ -84,21 +84,21 @@ func (c *MessageState) getAccurateTokenCount(llm domain.LLM) int {
 // estimateTokensFromMessages provides improved token estimation from message content
 func (c *MessageState) estimateTokensFromMessages() int {
 	var totalTokens int
-	
+
 	for _, msg := range c.Messages {
 		// Use stored token usage if available (most accurate)
 		if stored := msg.TotalTokens(); stored > 0 {
 			totalTokens += stored
 			continue
 		}
-		
+
 		// Improved estimation heuristic
 		content := msg.Content()
 		thinking := msg.Thinking()
-		
+
 		// Combine content and thinking for total character count
 		totalChars := len(content) + len(thinking)
-		
+
 		// Conservative token estimation (to avoid overestimating)
 		// Use the original simple approach to maintain compatibility
 		var estimatedTokens int
@@ -108,10 +108,10 @@ func (c *MessageState) estimateTokensFromMessages() int {
 		} else {
 			estimatedTokens = 8 // Minimum overhead for empty messages
 		}
-		
+
 		totalTokens += estimatedTokens
 	}
-	
+
 	return totalTokens
 }
 
@@ -123,13 +123,13 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 
 	// Get accurate current token count
 	currentTokens := c.getAccurateTokenCount(llm)
-	
+
 	// Calculate thresholds using standard compaction strategy
 	compactThreshold := int(float64(maxTokens) * CompactAtPercent)
 	targetAfterCompaction := int(float64(maxTokens) * TargetAfterPercent)
-	
+
 	usagePercent := (float64(currentTokens) / float64(maxTokens)) * 100
-	
+
 	logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Token-based compaction check",
 		"current_tokens", currentTokens,
 		"max_tokens", maxTokens,
@@ -144,7 +144,7 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 			"threshold", fmt.Sprintf("%.1f%%", CompactAtPercent*100))
 		return nil
 	}
-	
+
 	// Check if compaction will save meaningful tokens
 	tokensToSave := currentTokens - targetAfterCompaction
 	if tokensToSave < MinReductionTokens {
@@ -180,18 +180,18 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 	c.ResetTokenCounters()
 
 	// Block-based compaction strategy: keep recent complete conversation blocks
-	const preserveRecentBlocks = 5  // Keep the last 5 complete conversation blocks
-	
+	const preserveRecentBlocks = 5 // Keep the last 5 complete conversation blocks
+
 	// Always perform compaction if we reach this point (either from token or message threshold)
 
 	// Try block-based compaction first
 	blocksToPreserve := findConversationBlocksToPreserve(messages, preserveRecentBlocks)
-	
+
 	var olderMessages, recentMessages []message.Message
-	
+
 	// Try to use block-based compaction, but ensure we preserve at least 10 messages for compatibility
 	const minMessagesToPreserve = 10
-	
+
 	if len(blocksToPreserve) > 0 && len(blocksToPreserve) >= minMessagesToPreserve && len(blocksToPreserve) < len(messages)-5 {
 		// Block-based compaction with good number of messages
 		splitIndex := len(messages) - len(blocksToPreserve)
@@ -459,35 +459,35 @@ func findConversationBlocksToPreserve(messages []message.Message, blocksToKeep i
 	// Find conversation blocks by working backwards
 	blocks := make([][]message.Message, 0)
 	currentBlock := make([]message.Message, 0)
-	
+
 	// Work backwards to identify complete blocks
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		currentBlock = append([]message.Message{msg}, currentBlock...) // Prepend to maintain order
-		
+
 		// A block starts with a user message
 		if msg.Type() == message.MessageTypeUser {
 			// We found the start of a block
 			blocks = append([][]message.Message{currentBlock}, blocks...) // Prepend to maintain order
 			currentBlock = make([]message.Message, 0)
-			
+
 			// Stop if we have enough blocks
 			if len(blocks) >= blocksToKeep {
 				break
 			}
 		}
 	}
-	
+
 	// Flatten the blocks we want to keep
 	var result []message.Message
 	for _, block := range blocks {
 		result = append(result, block...)
 	}
-	
+
 	// Also preserve any incomplete block at the beginning (might be ongoing)
 	if len(currentBlock) > 0 && len(blocks) < blocksToKeep {
 		result = append(currentBlock, result...)
 	}
-	
+
 	return result
 }

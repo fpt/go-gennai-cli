@@ -158,7 +158,37 @@ func (m *FileSystemToolManager) registerFileSystemTools() {
 	// MultiEdit: apply multiple precise edits across files in one call
 	m.RegisterTool("MultiEdit", "Apply multiple exact string replacements across files in a single, atomic batch. Requires prior Read of target files.",
 		[]message.ToolArgument{
-			{Name: "edits", Description: "Array of edits: {file_path, old_string, new_string, replace_all?}", Required: true, Type: "array"},
+			{
+				Name:        "edits",
+				Description: "Array of edit objects, each containing file_path, old_string, new_string, and optional replace_all",
+				Required:    true,
+				Type:        "array",
+				Properties: map[string]any{
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"file_path": map[string]any{
+								"type":        "string",
+								"description": "Path to the file to edit",
+							},
+							"old_string": map[string]any{
+								"type":        "string",
+								"description": "Exact string to replace (must match exactly)",
+							},
+							"new_string": map[string]any{
+								"type":        "string",
+								"description": "New string to replace with",
+							},
+							"replace_all": map[string]any{
+								"type":        "boolean",
+								"description": "Replace all occurrences (default: false)",
+								"default":     false,
+							},
+						},
+						"required": []string{"file_path", "old_string", "new_string"},
+					},
+				},
+			},
 		},
 		m.handleMultiEdit)
 }

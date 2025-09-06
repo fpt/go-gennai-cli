@@ -10,7 +10,10 @@ import (
 	"github.com/fpt/go-gennai-cli/pkg/agent/events"
 	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 	"github.com/fpt/go-gennai-cli/pkg/message"
+	"github.com/pkg/errors"
 )
+
+var ErrWaitingForApproval = errors.New("waiting for user approval for tool call")
 
 // ReAct is a simple ReAct implementation that uses LLM and tools
 // It handles tool calls and manages the message state
@@ -19,12 +22,16 @@ import (
 // focusing on the core functionality of ReAct with LLM and tools.
 
 type ReAct struct {
-	llmClient     domain.LLM
-	state         domain.State
-	toolManager   domain.ToolManager
-	aligner       domain.Aligner
-	maxIterations int                  // configurable loop limit
-	eventEmitter  events.EventEmitter  // emitter for agent events
+	llmClient        domain.LLM
+	state            domain.State
+	toolManager      domain.ToolManager
+	aligner          domain.Aligner
+	maxIterations    int                 // configurable loop limit
+	eventEmitter     events.EventEmitter // emitter for agent events
+	thinkingChan     chan string         // channel for streaming thinking chunks
+	status           domain.AgentStatus
+	currentIteration int // current iteration count
+	pendingToolCall  message.Message
 }
 
 // Ensure ReAct implements domain.ReAct interface
@@ -131,15 +138,12 @@ func (r *ReAct) annotateAndLogUsage(resp message.Message) {
 	}
 }
 
-// Invoke processes input using the configured maxIterations
-func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, error) {
-	// Use the configured maxIterations instead of options.LoopLimit
-	loopLimit := r.maxIterations
-
+// Run processes input using the configured maxIterations
+func (r *ReAct) Run(ctx context.Context, input string) (message.Message, error) {
 	// Create internal thinking channel to convert string chunks to ThinkingChunk events
-	thinkingChan := make(chan string, 10)
+	r.thinkingChan = make(chan string, 10)
 	go func() {
-		for chunk := range thinkingChan {
+		for chunk := range r.thinkingChan {
 			// Only emit non-empty chunks - empty strings were used for end signaling
 			if chunk != "" {
 				r.eventEmitter.EmitEvent(events.EventTypeThinkingChunk, events.ThinkingChunkData{
@@ -148,13 +152,80 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 			}
 		}
 	}()
-	defer close(thinkingChan)
 
 	// Add user message to state (enriched with todos if available)
 	userMessage := message.NewChatMessage(message.MessageTypeUser, input)
 	r.state.AddMessage(userMessage)
 
-	for i := range loopLimit {
+	r.status = domain.AgentStatusRunning
+	msg, err := r.runInternal(ctx)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to run internal processing")
+	}
+
+	return msg, nil
+}
+
+// Resume processes input using the configured maxIterations
+func (r *ReAct) Resume(ctx context.Context) (message.Message, error) {
+	r.status = domain.AgentStatusRunning
+
+	if r.pendingToolCall != nil {
+		resp := r.pendingToolCall
+		r.pendingToolCall = nil
+
+		done, err := r.processResponse(ctx, r.currentIteration, resp)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			r.status = domain.AgentStatusCompleted
+			return resp, nil
+		}
+	}
+
+	msg, err := r.runInternal(ctx)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to run internal processing")
+	}
+
+	return msg, nil
+}
+
+func (r *ReAct) Close() {
+	close(r.thinkingChan)
+}
+
+func (r *ReAct) GetStatus() domain.AgentStatus {
+	return r.status
+}
+
+func (r *ReAct) GetPendingToolCall() message.Message {
+	return r.pendingToolCall
+}
+
+func (r *ReAct) CancelPendingToolCall() {
+	if r.pendingToolCall != nil {
+		if toolCall, ok := r.pendingToolCall.(*message.ToolCallMessage); ok {
+			// Create a declined tool result message to complete the tool call/result pair
+			declinedResult := message.NewToolResultMessage(
+				toolCall.ID(),
+				"",
+				"Operation cancelled by user",
+			)
+
+			// Add the declined result to state to complete the pair
+			r.state.AddMessage(declinedResult)
+		}
+
+		r.pendingToolCall = nil
+	}
+	r.status = domain.AgentStatusRunning
+}
+
+// runInternal processes input using the configured maxIterations
+func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
+	for ; r.currentIteration < r.maxIterations; r.currentIteration++ {
 		// Check for context cancellation (e.g., Ctrl+C)
 		select {
 		case <-ctx.Done():
@@ -172,7 +243,7 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 			reactLogger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed previous aligner messages", "count", removedCount)
 		}
 
-		r.aligner.InjectMessage(r.state, i, loopLimit)
+		r.aligner.InjectMessage(r.state, r.currentIteration, r.maxIterations)
 
 		// Apply mandatory cleanup (remove images, aligner messages) every iteration
 		if err := r.state.CleanupMandatory(); err != nil {
@@ -195,10 +266,10 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 		// Check if we have tools available and should use tool calling
 		if r.toolManager != nil && len(r.toolManager.GetTools()) > 0 {
 			// Use tool choice auto to let the LLM decide when to use tools
-			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto}, thinkingChan)
+			resp, err = r.chatWithToolChoice(ctx, messages, domain.ToolChoice{Type: domain.ToolChoiceAuto}, r.thinkingChan)
 		} else {
 			// Fall back to thinking if supported, otherwise regular chat
-			resp, err = r.chatWithThinkingIfSupported(ctx, messages, thinkingChan)
+			resp, err = r.chatWithThinkingIfSupported(ctx, messages, r.thinkingChan)
 		}
 
 		if err != nil {
@@ -214,97 +285,122 @@ func (r *ReAct) Invoke(ctx context.Context, input string) (message.Message, erro
 		fmt.Print("\r                    \r") // Clear the "Thinking..." line
 		// Annotate and log token usage when available
 		r.annotateAndLogUsage(resp)
-		r.printMinifiedResponse(resp, i)
 
-		switch resp := resp.(type) {
-		case *message.ChatMessage:
-			// Add assistant response to state
-			r.state.AddMessage(resp)
-			// Check if this is reasoning (intermediate thinking) vs final answer
-			if resp.Type() == message.MessageTypeReasoning {
-				// Continue the ReAct loop for reasoning messages
-				// (Debug logging removed for cleaner output - flow continues automatically)
-				continue
-			} else {
-				// Return for final answers (MessageTypeAssistant)
-				// (Debug logging removed for cleaner output - final answer reached)
-				r.emitEventWithIteration(events.EventTypeResponse, events.ResponseData{
-					Message: resp,
-				}, i, loopLimit)
-				return resp, nil
+		// Check tool call if it requires user's approval (file writing operations)
+		if toolCall, ok := resp.(*message.ToolCallMessage); ok {
+			toolName := string(toolCall.ToolName())
+
+			// Only require approval for potentially destructive file operations
+			requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+
+			if requiresApproval {
+				r.pendingToolCall = toolCall
+				r.status = domain.AgentStatusWaitingForApproval
+				return nil, ErrWaitingForApproval
 			}
+		}
 
-		case *message.ToolCallMessage:
-			// Record the tool call message in state
-			r.state.AddMessage(resp)
-			toolCall := resp
-
-			// Check for cancellation before tool execution
-			select {
-			case <-ctx.Done():
-				reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during tool execution. History preserved.")
-				return nil, ctx.Err()
-			default:
-			}
-
-			// Emit tool call start event
-			r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
-				ToolName:  string(toolCall.ToolName()),
-				Arguments: toolCall.ToolArguments(),
-				CallID:    "", // Could add call ID if needed
-			})
-			msg, err := r.handleToolCall(ctx, toolCall)
-			if err != nil {
-				return nil, fmt.Errorf("failed to handle tool call: %w", err)
-			}
-
-			// Show truncated tool result
-			r.printTruncatedToolResult(msg)
-
-			// Add tool result to state
-			r.state.AddMessage(msg)
-
-			// Continue to next iteration to process the tool result
-
-		case *message.ToolCallBatchMessage:
-			// Execute multiple tools within a single model turn to reduce loops
-			batch := resp
-			calls := batch.Calls()
-			for _, call := range calls {
-				// Check for cancellation before each tool in the batch
-				select {
-				case <-ctx.Done():
-					reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
-					return nil, ctx.Err()
-				default:
-				}
-
-				// Add each tool call message to state for transcript consistency
-				r.state.AddMessage(call)
-				// Emit tool call start event for batch call
-				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
-					ToolName:  string(call.ToolName()),
-					Arguments: call.ToolArguments(),
-					CallID:    "", // Could add call ID if needed
-				})
-				msg, err := r.handleToolCall(ctx, call)
-				if err != nil {
-					return nil, fmt.Errorf("failed to handle tool call (batch): %w", err)
-				}
-				r.printTruncatedToolResult(msg)
-				r.state.AddMessage(msg)
-			}
-			// After executing the batch, continue the loop to let the model consume results
-			continue
-
-		default:
-			return nil, fmt.Errorf("unexpected response type: %T", resp)
+		done, err := r.processResponse(ctx, r.currentIteration, resp)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			r.status = domain.AgentStatusCompleted
+			return resp, nil
 		}
 	}
 
 	// TBD: If it exhausted with tool calls, we might want to drop it to prevent Anthropic's error.
+	return nil, fmt.Errorf("exceeded maximum loop limit (%d) without a valid response", r.maxIterations)
+}
 
-	return nil, fmt.Errorf("exceeded maximum loop limit (%d) without a valid response", loopLimit)
+// processResponse processes input using the configured maxIterations
+func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp message.Message) (bool, error) {
+	var done bool
+
+	switch resp := resp.(type) {
+	case *message.ChatMessage:
+		// Add assistant response to state
+		r.state.AddMessage(resp)
+		// Check if this is reasoning (intermediate thinking) vs final answer
+		if resp.Type() == message.MessageTypeReasoning {
+			// Continue the ReAct loop for reasoning messages
+			// (Debug logging removed for cleaner output - flow continues automatically)
+		} else {
+			// Return for final answers (MessageTypeAssistant)
+			// (Debug logging removed for cleaner output - final answer reached)
+			r.emitEventWithIteration(events.EventTypeResponse, events.ResponseData{
+				Message: resp,
+			}, currentIter, r.maxIterations)
+			done = true
+		}
+
+	case *message.ToolCallMessage:
+		// Record the tool call message in state
+		r.state.AddMessage(resp)
+		toolCall := resp
+
+		// Check for cancellation before tool execution
+		select {
+		case <-ctx.Done():
+			reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during tool execution. History preserved.")
+			return done, ctx.Err()
+		default:
+		}
+
+		// Emit tool call start event
+		r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+			ToolName:  string(toolCall.ToolName()),
+			Arguments: r.summarizeToolArgs(toolCall.ToolArguments()),
+			CallID:    "", // Could add call ID if needed
+		})
+		msg, err := r.handleToolCall(ctx, toolCall)
+		if err != nil {
+			return done, fmt.Errorf("failed to handle tool call: %w", err)
+		}
+
+		// Show truncated tool result
+		r.printTruncatedToolResult(msg)
+
+		// Add tool result to state
+		r.state.AddMessage(msg)
+
+		// Continue to next iteration to process the tool result
+
+	case *message.ToolCallBatchMessage:
+		// Execute multiple tools within a single model turn to reduce loops
+		batch := resp
+		calls := batch.Calls()
+		for _, call := range calls {
+			// Check for cancellation before each tool in the batch
+			select {
+			case <-ctx.Done():
+				reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
+				return done, ctx.Err()
+			default:
+			}
+
+			// Add each tool call message to state for transcript consistency
+			r.state.AddMessage(call)
+			// Emit tool call start event for batch call
+			r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+				ToolName:  string(call.ToolName()),
+				Arguments: r.summarizeToolArgs(call.ToolArguments()),
+				CallID:    "", // Could add call ID if needed
+			})
+			msg, err := r.handleToolCall(ctx, call)
+			if err != nil {
+				return done, fmt.Errorf("failed to handle tool call (batch): %w", err)
+			}
+			r.printTruncatedToolResult(msg)
+			r.state.AddMessage(msg)
+		}
+		// After executing the batch, continue the loop to let the model consume results
+	default:
+		return done, fmt.Errorf("unexpected response type: %T", resp)
+	}
+
+	return done, nil
 }
 
 func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMessage) (message.Message, error) {
@@ -315,7 +411,9 @@ func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMe
 	// Execute tool and get structured result
 	toolResult, err := r.toolManager.CallTool(ctx, toolName, toolArgs)
 	if err != nil {
-		return nil, fmt.Errorf("tool execution failed: %v", err)
+		// Don't return an error - create a tool result message with the error instead
+		// This allows the agent to continue and let the LLM see the error message
+		return message.NewToolResultMessage(id, "", fmt.Sprintf("Tool execution failed: %v", err)), nil
 	}
 
 	// Handle structured tool result
@@ -331,32 +429,15 @@ func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMe
 	return resp, nil
 }
 
-// printMinifiedResponse shows a clean, minified version of the agent's response
-func (r *ReAct) printMinifiedResponse(resp message.Message, iteration int) {
-	switch msg := resp.(type) {
-	case *message.ChatMessage:
-		// Suppress assistant content/reasoning logs here to avoid duplicate
-		// console output; thinking is streamed via the thinking channel.
-		_ = iteration
-	case *message.ToolCallMessage:
-		// Emit tool call start event (for logging the call)
-		r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
-			ToolName:  string(msg.ToolName()),
-			Arguments: msg.ToolArguments(),
-			CallID:    "", // Could add call ID if needed
-		})
-	}
-}
-
 // printTruncatedToolResult emits tool result events
 func (r *ReAct) printTruncatedToolResult(msg message.Message) {
 	content := strings.TrimRight(msg.Content(), "\n")
 	isError := strings.HasPrefix(content, "Error:")
-	
+
 	// Emit tool result event
 	r.eventEmitter.EmitEvent(events.EventTypeToolResult, events.ToolResultData{
 		ToolName: "", // Tool name would need to be tracked separately
-		CallID:   "", // Call ID would need to be tracked separately  
+		CallID:   "", // Call ID would need to be tracked separately
 		Content:  content,
 		IsError:  isError,
 	})
@@ -364,7 +445,7 @@ func (r *ReAct) printTruncatedToolResult(msg message.Message) {
 
 // summarizeToolArgs produces a log-friendly version of tool arguments by truncating
 // large strings and collapsing deeply nested or large collections.
-func (r *ReAct) summarizeToolArgs(args message.ToolArgumentValues) any {
+func (r *ReAct) summarizeToolArgs(args message.ToolArgumentValues) message.ToolArgumentValues {
 	const (
 		maxStringLen  = 120 // max characters for string values
 		maxArrayItems = 8   // max items to display from arrays/slices
@@ -435,7 +516,12 @@ func (r *ReAct) summarizeToolArgs(args message.ToolArgumentValues) any {
 		}
 	}
 
-	return summarize(map[string]any(args), 0)
+	result := summarize(map[string]any(args), 0)
+	if summarizedMap, ok := result.(map[string]any); ok {
+		return message.ToolArgumentValues(summarizedMap)
+	}
+	// Fallback to original args if something went wrong
+	return args
 }
 
 // emitEventWithIteration emits an event with iteration context
@@ -449,7 +535,7 @@ func (r *ReAct) emitEventWithIteration(eventType events.EventType, data interfac
 			Maximum: maxIterations,
 		},
 	}
-	
+
 	for _, handler := range r.eventEmitter.(*events.SimpleEventEmitter).GetHandlers() {
 		handler(event)
 	}

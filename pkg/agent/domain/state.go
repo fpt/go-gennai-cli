@@ -19,9 +19,7 @@ type State interface {
 	RemoveMessagesBySource(source message.MessageSource) int
 	// GetTotalTokenUsage returns the total token usage across all messages
 	GetTotalTokenUsage() (inputTokens, outputTokens, totalTokens int)
-	// Context persistence
-	Serialize() ([]byte, error)
-	Deserialize(data []byte) error
-	SaveToFile(filePath string) error
-	LoadFromFile(filePath string) error
+	// Context persistence using repository
+	SaveToFile() error
+	LoadFromFile() error
 }

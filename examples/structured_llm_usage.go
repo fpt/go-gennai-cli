@@ -202,20 +202,3 @@ func capabilityExample() {
 		}
 	}
 }
-
-// Example of using JSON Schema for documentation
-func demonstrateSchemaAccess() {
-	// You can generate the JSON Schema directly for documentation
-	generator := ollama.NewJSONSchemaGenerator()
-
-	// Generate schema for TaskAnalysis without creating any clients
-	schema, err := generator.GenerateSchemaFromValue(TaskAnalysis{})
-	if err != nil {
-		log.Printf("Failed to generate schema: %v", err)
-		return
-	}
-
-	fmt.Printf("JSON Schema for TaskAnalysis:\n%s\n", string(schema))
-
-	// This shows the JSON Schema that would be sent to Ollama
-}

@@ -202,6 +202,9 @@ The system uses CLI-specified scenarios with embedded YAML configurations. No AI
 
 **Key Architecture Features:**
 - **DDD Layering**: Clean separation with app layer (ScenarioRunner) managing workflow
+- **Event-Driven Architecture**: ReAct agent emits events, app layer handles formatting and display
+- **Dependency Injection**: Constructor injection pattern for clean testability and modularity
+- **Tool Approval System**: Interactive approval workflow for destructive file operations
 - **Embedded + Custom YAML Configuration**: Built-in scenarios embedded in binary + optional custom overrides
 - **Universal Tool Foundation**: Core tools always available, specialized tools added per scenario
 - **Thinking Channel Management**: Application layer handles thinking stream creation and management
@@ -389,6 +392,59 @@ The architecture uses clean dependency injection with DDD layering:
 - ScenarioRunner (app layer) manages thinking channels and session persistence
 - ReAct (domain layer) handles execution with injected tool managers
 - No tight coupling between layers
+
+**Event-Driven Architecture:**
+Clean separation between business logic and presentation concerns:
+
+```go
+// ReAct agent emits events without knowing about output formatting
+r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+    ToolName:  string(toolCall.ToolName()),
+    Arguments: r.summarizeToolArgs(toolCall.ToolArguments()),
+})
+
+// App layer handles event formatting and output
+emitter.AddHandler(func(event events.AgentEvent) {
+    writer := s.OutWriter()
+    switch event.Type {
+    case events.EventTypeToolCallStart:
+        if data, ok := event.Data.(events.ToolCallStartData); ok {
+            fmt.Fprintf(writer, "🔧 Running tool %s %v\n", data.ToolName, data.Arguments)
+        }
+    }
+})
+```
+
+**Event Types:**
+- `EventTypeThinkingChunk` - Streaming thinking content
+- `EventTypeToolCallStart` - Tool execution begins
+- `EventTypeToolResult` - Tool execution complete
+- `EventTypeResponse` - Final agent response
+- `EventTypeError` - Error conditions
+
+**Tool Approval System:**
+Interactive approval workflow for potentially destructive operations:
+
+```go
+// Tool approval check in ReAct agent
+if toolCall, ok := resp.(*message.ToolCallMessage); ok {
+    toolName := string(toolCall.ToolName())
+    
+    // Only require approval for potentially destructive file operations
+    requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+    
+    if requiresApproval && !s.autoApprove {
+        r.pendingToolCall = toolCall
+        r.status = domain.AgentStatusWaitingApproval
+        return nil, react.ErrWaitingForApproval
+    }
+}
+```
+
+**Approval Modes:**
+- **Interactive**: Prompts user with Yes/Always/No options
+- **Auto-Approve**: Bypasses all prompts via `--auto-approve` flag
+- **Non-Interactive**: Auto-approves with logged notifications in pipe/script mode
 
 **Interactive Mode:**
 The application supports two modes:

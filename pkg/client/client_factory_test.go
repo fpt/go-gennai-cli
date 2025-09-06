@@ -2,8 +2,9 @@ package client
 
 import (
 	"context"
-	"errors"
 	"testing"
+
+	"github.com/pkg/errors"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/message"

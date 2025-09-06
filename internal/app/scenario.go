@@ -2,12 +2,17 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	pkgErrors "github.com/pkg/errors"
+
+	"github.com/manifoldco/promptui"
 
 	"github.com/fpt/go-gennai-cli/internal/config"
 	"github.com/fpt/go-gennai-cli/internal/infra"
@@ -69,6 +74,7 @@ type ScenarioRunner struct {
 	logger           *pkgLogger.Logger // Structured logger for this component
 	out              io.Writer         // Output writer for streaming/printing
 	thinkingStarted  bool              // Track if thinking has started for emoji handling
+	alwaysApprove    bool              // Track if user selected "Always" approve for this session
 }
 
 // WorkingDir returns the scenario runner's working directory
@@ -84,11 +90,14 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	// Create individual managers for universal tool manager
 	// Only create persistent todo manager in interactive mode
 	var todoToolManager *tool.TodoToolManager
+	alwaysApprove := false
 	if isInteractiveMode {
 		todoToolManager = tool.NewTodoToolManager(workingDir)
 	} else {
 		// For one-shot mode, create an in-memory-only todo manager
 		todoToolManager = tool.NewInMemoryTodoToolManager()
+		// Auto-approve in one-shot mode
+		alwaysApprove = true
 	}
 
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
@@ -118,7 +127,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	}
 
 	// Create or restore shared message state with session persistence
-	sharedState := state.NewMessageState()
+	var sharedState domain.State
 	var sessionFilePath string
 
 	// Only handle session persistence in interactive mode
@@ -127,10 +136,14 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 		if userConfig, err := config.DefaultUserConfig(); err == nil {
 			if sessionPath, err := userConfig.GetProjectSessionFile(workingDir); err == nil {
 				sessionFilePath = sessionPath
+				// Create repository and inject it into MessageState
+				messageRepo := infra.NewMessageHistoryRepository(sessionFilePath)
+				sharedState = state.NewMessageStateWithRepository(messageRepo)
+
 				// Only restore session if not skipped (for -f flag isolation)
 				if !skipSessionRestore {
 					// Try to load existing session state
-					if err := sharedState.LoadFromFile(sessionFilePath); err != nil {
+					if err := sharedState.LoadFromFile(); err != nil {
 						logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with new session",
 							"reason", "could not load existing session", "error", err)
 					} else {
@@ -143,12 +156,17 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 				}
 			} else {
 				logger.Warn("Could not get session file path", "error", err)
+				// Fallback to in-memory state
+				sharedState = state.NewMessageState()
 			}
 		} else {
 			logger.Warn("Could not access user config for session persistence", "error", err)
+			// Fallback to in-memory state
+			sharedState = state.NewMessageState()
 		}
 	} else {
 		// One-shot mode: no session persistence, always start clean
+		sharedState = state.NewMessageState()
 		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
 	}
 
@@ -165,6 +183,7 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 		settings:         settings,
 		logger:           logger.WithComponent("scenario-runner"),
 		out:              out,
+		alwaysApprove:    alwaysApprove,
 	}
 }
 
@@ -273,20 +292,105 @@ func (s *ScenarioRunner) executeScenario(ctx context.Context, userInput string, 
 		userPrompt = strings.Join(out, "\n")
 	}
 
-	result, err := reactClient.Invoke(ctx, userPrompt)
+	result, err := reactClient.Run(ctx, userPrompt)
+
+	// Handle multiple approval workflows in sequence
+	var approvalErrors []error
+	for err != nil && pkgErrors.Is(err, react.ErrWaitingForApproval) {
+		result, err = s.handleApprovalWorkflow(ctx, reactClient)
+		if err != nil && !pkgErrors.Is(err, react.ErrWaitingForApproval) {
+			approvalErrors = append(approvalErrors, err)
+		}
+	}
+
 	if err != nil {
+		if len(approvalErrors) > 0 {
+			return nil, fmt.Errorf("action execution failed: %w", errors.Join(append(approvalErrors, err)...))
+		}
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
+	defer reactClient.Close()
 
 	// Save session state after successful interaction
 	if s.sessionFilePath != "" {
-		if saveErr := s.sharedState.SaveToFile(s.sessionFilePath); saveErr != nil {
+		if saveErr := s.sharedState.SaveToFile(); saveErr != nil {
 			s.logger.Warn("Failed to save session state",
 				"session_file", s.sessionFilePath, "error", saveErr)
 		}
 	}
 
 	return result, nil
+}
+
+// handleApprovalWorkflow handles the write confirmation workflow when the agent is waiting for approval
+func (s *ScenarioRunner) handleApprovalWorkflow(ctx context.Context, reactClient domain.ReAct) (message.Message, error) {
+	writer := s.OutWriter()
+
+	// If "Always" was previously selected, auto-approve
+	if s.alwaysApprove {
+		fmt.Fprintf(writer, "✅ Proceeding (Always selected)...\n\n")
+		return reactClient.Resume(ctx)
+	}
+
+	// Get the pending tool call details
+	lastMessage := reactClient.GetLastMessage()
+
+	// Check if we can interact with the user (has a proper terminal)
+	stat, err := os.Stdin.Stat()
+	if err != nil || (stat.Mode()&os.ModeCharDevice) == 0 {
+		// Not interactive mode - auto-approve
+		fmt.Fprintf(writer, "\n📝 About to write file(s):\n")
+		fmt.Fprintf(writer, "📋 %s\n", lastMessage.TruncatedString())
+		fmt.Fprintf(writer, "✅ Proceeding (non-interactive mode)...\n\n")
+		return reactClient.Resume(ctx)
+	}
+
+	// Display the pending action
+	fmt.Fprintf(writer, "\n📝 About to write file(s):\n")
+	fmt.Fprintf(writer, "📋 %s\n\n", lastMessage.TruncatedString())
+
+	// Create promptui select with horizontal-style options
+	prompt := promptui.Select{
+		Label: "Proceed with this action?",
+		Items: []string{"Yes", "Always", "No"},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}",
+			Active:   "▶ {{ . | cyan }}",
+			Inactive: "  {{ . }}",
+			Selected: "{{ \"✓\" | green }} {{ . }}",
+		},
+		Size: 3,
+	}
+
+	_, result, err := prompt.Run()
+	if err != nil {
+		// If promptui fails, fall back to auto-approve
+		fmt.Fprintf(writer, "✅ Input error, proceeding...\n\n")
+		return reactClient.Resume(ctx)
+	}
+
+	switch result {
+	case "Yes":
+		fmt.Fprintf(writer, "✅ Proceeding...\n\n")
+		return reactClient.Resume(ctx)
+
+	case "Always":
+		s.alwaysApprove = true // Set flag for this session
+		fmt.Fprintf(writer, "✅ Proceeding (will auto-approve future file operations this session)...\n\n")
+		return reactClient.Resume(ctx)
+
+	case "No":
+		fmt.Fprintf(writer, "⏸️  Cancelled.\n")
+
+		// Cancel the pending tool call (this will add declined result message and reset status)
+		reactClient.CancelPendingToolCall()
+		return reactClient.Resume(ctx)
+
+	default:
+		// Fallback - should not happen
+		fmt.Fprintf(writer, "✅ Proceeding...\n\n")
+		return reactClient.Resume(ctx)
+	}
 }
 
 // ClearHistory clears the conversation history
@@ -296,7 +400,7 @@ func (s *ScenarioRunner) ClearHistory() {
 
 	// Save cleared state to session file
 	if s.sessionFilePath != "" {
-		if saveErr := s.sharedState.SaveToFile(s.sessionFilePath); saveErr != nil {
+		if saveErr := s.sharedState.SaveToFile(); saveErr != nil {
 			s.logger.Warn("Failed to save cleared session state",
 				"session_file", s.sessionFilePath, "error", saveErr)
 		}
@@ -369,7 +473,25 @@ func (s *ScenarioRunner) InvokeWithOptions(ctx context.Context, prompt string) (
 	reactClient, eventEmitter := react.NewReAct(llmWithTools, s.universalManager, s.sharedState, aligner, maxIterations)
 	s.setupEventHandlers(eventEmitter)
 
-	return reactClient.Invoke(ctx, prompt)
+	result, err := reactClient.Run(ctx, prompt)
+
+	// Handle multiple approval workflows in sequence
+	var approvalErrors []error
+	for err != nil && pkgErrors.Is(err, react.ErrWaitingForApproval) {
+		result, err = s.handleApprovalWorkflow(ctx, reactClient)
+		if err != nil && !pkgErrors.Is(err, react.ErrWaitingForApproval) {
+			approvalErrors = append(approvalErrors, err)
+		}
+	}
+
+	if err != nil {
+		if len(approvalErrors) > 0 {
+			return nil, errors.Join(append(approvalErrors, err)...)
+		}
+		return nil, err
+	}
+
+	return result, err
 }
 
 // GetConversationPreview returns a formatted preview of the last few messages

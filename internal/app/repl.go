@@ -324,6 +324,9 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 
 		response, invokeErr := a.Invoke(execCtx, pb.RawPrompt(), scenario)
 
+		// Check for cancellation BEFORE cleaning up
+		wasCanceled := execCtx.Err() == context.Canceled
+
 		// Clean up signal handling
 		signal.Stop(sigChan)
 		close(sigChan)
@@ -331,7 +334,7 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 
 		if invokeErr != nil {
 			// Check if the error was due to cancellation
-			if execCtx.Err() == context.Canceled {
+			if wasCanceled {
 				fmt.Printf("🔄 Ready for next command.\n")
 			} else {
 				fmt.Printf("❌ Error: %v\n", invokeErr)

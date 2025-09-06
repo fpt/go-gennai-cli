@@ -1,9 +1,6 @@
 package state
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/fpt/go-gennai-cli/pkg/message"
@@ -159,139 +156,11 @@ func TestGetValidConversationHistory(t *testing.T) {
 	}
 }
 
-func TestSerialization(t *testing.T) {
-	state := NewMessageState()
-	state.Metadata["test_key"] = "test_value"
+// Serialization tests moved to infra/message_test.go
 
-	// Add different types of messages
-	userMsg := message.NewChatMessage(message.MessageTypeUser, "Hello")
-	state.AddMessage(userMsg)
+// File operations tests moved to infra/message_test.go
 
-	thinkingMsg := message.NewChatMessageWithThinking(message.MessageTypeAssistant, "Response", "I need to think about this")
-	state.AddMessage(thinkingMsg)
-
-	imageMsg := message.NewChatMessageWithImages(message.MessageTypeUser, "Look at this", []string{"base64data"})
-	state.AddMessage(imageMsg)
-
-	toolCall := message.NewToolCallMessage("test_tool", message.ToolArgumentValues{"arg": "value"})
-	state.AddMessage(toolCall)
-
-	toolResult := message.NewToolResultMessage(toolCall.ID(), "Success", "")
-	state.AddMessage(toolResult)
-
-	// Serialize
-	data, err := state.Serialize()
-	if err != nil {
-		t.Fatalf("Serialization failed: %v", err)
-	}
-
-	// Validate JSON structure
-	var serializable SerializableState
-	if err := json.Unmarshal(data, &serializable); err != nil {
-		t.Fatalf("Serialized data is not valid JSON: %v", err)
-	}
-
-	if len(serializable.Messages) != 5 {
-		t.Fatalf("Expected 5 serialized messages, got %d", len(serializable.Messages))
-	}
-
-	// Deserialize
-	newState := NewMessageState()
-	if err := newState.Deserialize(data); err != nil {
-		t.Fatalf("Deserialization failed: %v", err)
-	}
-
-	// Verify deserialized state
-	if len(newState.Messages) != 5 {
-		t.Fatalf("Expected 5 deserialized messages, got %d", len(newState.Messages))
-	}
-
-	if newState.Metadata["test_key"] != "test_value" {
-		t.Fatalf("Expected metadata to be preserved, got %v", newState.Metadata)
-	}
-
-	// Check message types and content
-	if newState.Messages[0].Type() != message.MessageTypeUser {
-		t.Fatal("First message type not preserved")
-	}
-	if newState.Messages[0].Content() != "Hello" {
-		t.Fatal("First message content not preserved")
-	}
-
-	if newState.Messages[1].Thinking() != "I need to think about this" {
-		t.Fatal("Thinking content not preserved")
-	}
-
-	if len(newState.Messages[2].Images()) != 1 {
-		t.Fatal("Images not preserved")
-	}
-
-	if newState.Messages[3].Type() != message.MessageTypeToolCall {
-		t.Fatal("Tool call type not preserved")
-	}
-
-	if newState.Messages[4].Type() != message.MessageTypeToolResult {
-		t.Fatal("Tool result type not preserved")
-	}
-}
-
-func TestFileOperations(t *testing.T) {
-	// Create temporary directory for testing
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "test_state.json")
-
-	// Create state with test data
-	originalState := NewMessageState()
-	originalState.Metadata["test"] = "data"
-	originalState.AddMessage(message.NewChatMessage(message.MessageTypeUser, "Test message"))
-
-	// Save to file
-	if err := originalState.SaveToFile(filePath); err != nil {
-		t.Fatalf("SaveToFile failed: %v", err)
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		t.Fatal("File was not created")
-	}
-
-	// Load from file
-	loadedState := NewMessageState()
-	if err := loadedState.LoadFromFile(filePath); err != nil {
-		t.Fatalf("LoadFromFile failed: %v", err)
-	}
-
-	// Verify loaded state
-	if len(loadedState.Messages) != 1 {
-		t.Fatalf("Expected 1 loaded message, got %d", len(loadedState.Messages))
-	}
-
-	if loadedState.Messages[0].Content() != "Test message" {
-		t.Fatal("Message content not preserved in file operations")
-	}
-
-	if loadedState.Metadata["test"] != "data" {
-		t.Fatal("Metadata not preserved in file operations")
-	}
-}
-
-func TestLoadFromNonExistentFile(t *testing.T) {
-	state := NewMessageState()
-	nonExistentPath := filepath.Join(t.TempDir(), "nonexistent.json")
-
-	// Should not return error for non-existent file, just empty state
-	if err := state.LoadFromFile(nonExistentPath); err != nil {
-		t.Fatalf("LoadFromFile should not fail for non-existent file: %v", err)
-	}
-
-	if len(state.Messages) != 0 {
-		t.Fatal("State should be empty for non-existent file")
-	}
-
-	if state.Metadata == nil {
-		t.Fatal("Metadata should be initialized for non-existent file")
-	}
-}
+// Load from non-existent file tests moved to infra/message_test.go
 
 func TestGetMessages(t *testing.T) {
 	state := NewMessageState()
@@ -323,25 +192,14 @@ func TestMessageSourceHandling(t *testing.T) {
 	summaryMsg := message.NewSummarySystemMessage("Summary")
 	state.AddMessage(summaryMsg)
 
-	// Verify sources are preserved through serialization
-	data, err := state.Serialize()
-	if err != nil {
-		t.Fatalf("Serialization failed: %v", err)
-	}
-
-	newState := NewMessageState()
-	if err := newState.Deserialize(data); err != nil {
-		t.Fatalf("Deserialization failed: %v", err)
-	}
-
-	// Test removing by source still works
-	removed := newState.RemoveMessagesBySource(message.MessageSourceAligner)
+	// Test removing by source works
+	removed := state.RemoveMessagesBySource(message.MessageSourceAligner)
 	if removed != 1 {
 		t.Fatalf("Expected 1 aligner message removed, got %d", removed)
 	}
 
-	if len(newState.Messages) != 2 {
-		t.Fatalf("Expected 2 messages after removing aligner, got %d", len(newState.Messages))
+	if len(state.Messages) != 2 {
+		t.Fatalf("Expected 2 messages after removing aligner, got %d", len(state.Messages))
 	}
 }
 
@@ -402,155 +260,67 @@ func TestComplexToolScenario(t *testing.T) {
 	}
 }
 
-func TestSerializationRoundTrip(t *testing.T) {
+// Serialization round trip tests moved to infra/message_test.go
+func TestMessageStateBasicOperations(t *testing.T) {
 	// Create a comprehensive test state
-	originalState := NewMessageState()
+	state := NewMessageState()
 
 	// Add metadata
-	originalState.Metadata["session_id"] = "test_session_123"
-	originalState.Metadata["user_id"] = 456
-	originalState.Metadata["config"] = map[string]interface{}{
-		"temperature": 0.7,
-		"max_tokens":  1000,
-	}
+	state.Metadata["session_id"] = "test_session_123"
+	state.Metadata["user_id"] = 456
 
 	// Add various message types
-	messages := []message.Message{
-		message.NewChatMessage(message.MessageTypeUser, "Start conversation"),
-		message.NewChatMessage(message.MessageTypeAssistant, "Hello! How can I help?"),
-		message.NewChatMessageWithThinking(message.MessageTypeAssistant, "Let me think", "This requires careful consideration"),
-		message.NewChatMessageWithImages(message.MessageTypeUser, "Look at this", []string{"image1", "image2"}),
-	}
+	userMsg := message.NewChatMessage(message.MessageTypeUser, "Start conversation")
+	state.AddMessage(userMsg)
+
+	assistantMsg := message.NewChatMessage(message.MessageTypeAssistant, "Hello! How can I help?")
+	state.AddMessage(assistantMsg)
+
+	thinkingMsg := message.NewChatMessageWithThinking(message.MessageTypeAssistant, "Let me think", "This requires careful consideration")
+	state.AddMessage(thinkingMsg)
+
+	imageMsg := message.NewChatMessageWithImages(message.MessageTypeUser, "Look at this", []string{"image1", "image2"})
+	state.AddMessage(imageMsg)
 
 	// Add tool interactions
 	toolCall := message.NewToolCallMessage("complex_tool", message.ToolArgumentValues{
 		"string_param": "test",
 		"number_param": 42,
-		"bool_param":   true,
-		"array_param":  []interface{}{"a", "b", "c"},
-		"object_param": map[string]interface{}{
-			"nested": "value",
-			"count":  10,
-		},
 	})
-	messages = append(messages, toolCall)
+	state.AddMessage(toolCall)
 
 	toolResult := message.NewToolResultMessage(toolCall.ID(), "Complex tool executed successfully", "")
-	messages = append(messages, toolResult)
+	state.AddMessage(toolResult)
 
-	// Add error case
-	errorTool := message.NewToolCallMessage("error_tool", message.ToolArgumentValues{"param": "fail"})
-	messages = append(messages, errorTool)
-
-	errorResult := message.NewToolResultMessage(errorTool.ID(), "", "Tool execution failed: invalid parameter")
-	messages = append(messages, errorResult)
-
-	// Add all messages to state
-	for _, msg := range messages {
-		originalState.AddMessage(msg)
-	}
-
-	// Serialize and deserialize
-	data, err := originalState.Serialize()
-	if err != nil {
-		t.Fatalf("Serialization failed: %v", err)
-	}
-
-	deserializedState := NewMessageState()
-	if err := deserializedState.Deserialize(data); err != nil {
-		t.Fatalf("Deserialization failed: %v", err)
-	}
-
-	// Verify all data is preserved
-	if len(deserializedState.Messages) != len(originalState.Messages) {
-		t.Fatalf("Message count mismatch: expected %d, got %d",
-			len(originalState.Messages), len(deserializedState.Messages))
+	// Verify state operations
+	if len(state.Messages) != 6 {
+		t.Fatalf("Expected 6 messages, got %d", len(state.Messages))
 	}
 
 	// Verify metadata
-	if deserializedState.Metadata["session_id"] != "test_session_123" {
-		t.Fatal("Session ID not preserved")
-	}
-	// JSON unmarshaling converts numbers to float64, so we need to check that
-	if userID, ok := deserializedState.Metadata["user_id"].(float64); !ok || userID != 456 {
-		t.Fatalf("User ID not preserved, got %v (%T)", deserializedState.Metadata["user_id"], deserializedState.Metadata["user_id"])
+	if state.Metadata["session_id"] != "test_session_123" {
+		t.Fatal("Session ID metadata not preserved")
 	}
 
-	// Verify complex nested metadata
-	config, ok := deserializedState.Metadata["config"].(map[string]interface{})
-	if !ok {
-		t.Fatal("Config metadata not preserved as map")
-	}
-	if temp, ok := config["temperature"].(float64); !ok || temp != 0.7 {
-		t.Fatalf("Nested config temperature not preserved, got %v (%T)", config["temperature"], config["temperature"])
+	// Verify message content
+	if state.Messages[0].Content() != "Start conversation" {
+		t.Fatal("First message content not preserved")
 	}
 
-	// Verify message content preservation
-	for i, originalMsg := range originalState.Messages {
-		deserializedMsg := deserializedState.Messages[i]
-
-		if originalMsg.Type() != deserializedMsg.Type() {
-			t.Fatalf("Message %d type mismatch", i)
-		}
-		if originalMsg.Content() != deserializedMsg.Content() {
-			t.Fatalf("Message %d content mismatch", i)
-		}
-		if originalMsg.Thinking() != deserializedMsg.Thinking() {
-			t.Fatalf("Message %d thinking mismatch", i)
-		}
-
-		// Check images
-		originalImages := originalMsg.Images()
-		deserializedImages := deserializedMsg.Images()
-		if len(originalImages) != len(deserializedImages) {
-			t.Fatalf("Message %d images count mismatch", i)
-		}
-		for j, img := range originalImages {
-			if img != deserializedImages[j] {
-				t.Fatalf("Message %d image %d mismatch", i, j)
-			}
-		}
+	if state.Messages[2].Thinking() != "This requires careful consideration" {
+		t.Fatal("Thinking content not preserved")
 	}
 
-	// Verify tool call arguments are preserved correctly
-	toolCallMsg := deserializedState.Messages[4] // Should be the complex tool call
-	if toolCallMsg.Type() != message.MessageTypeToolCall {
-		t.Fatal("Tool call message type not preserved")
+	if len(state.Messages[3].Images()) != 2 {
+		t.Fatal("Images not preserved")
 	}
 
-	if toolCall, ok := toolCallMsg.(*message.ToolCallMessage); ok {
-		args := toolCall.ToolArguments()
-		if args["string_param"] != "test" {
-			t.Fatal("String parameter not preserved")
-		}
-		if numParam, ok := args["number_param"].(float64); !ok || numParam != 42 {
-			t.Fatalf("Number parameter not preserved, got %v (%T)", args["number_param"], args["number_param"])
-		}
-		if args["bool_param"] != true {
-			t.Fatal("Boolean parameter not preserved")
-		}
+	// Verify tool call functionality
+	if state.Messages[4].Type() != message.MessageTypeToolCall {
+		t.Fatal("Tool call type not preserved")
+	}
 
-		// Check array parameter
-		if arrayParam, ok := args["array_param"].([]interface{}); ok {
-			if len(arrayParam) != 3 || arrayParam[0] != "a" {
-				t.Fatal("Array parameter not preserved correctly")
-			}
-		} else {
-			t.Fatal("Array parameter type not preserved")
-		}
-
-		// Check object parameter
-		if objectParam, ok := args["object_param"].(map[string]interface{}); ok {
-			if objectParam["nested"] != "value" {
-				t.Fatal("Object parameter nested value not preserved correctly")
-			}
-			if count, ok := objectParam["count"].(float64); !ok || count != 10 {
-				t.Fatalf("Object parameter count not preserved correctly, got %v (%T)", objectParam["count"], objectParam["count"])
-			}
-		} else {
-			t.Fatal("Object parameter type not preserved")
-		}
-	} else {
-		t.Fatal("Tool call message could not be cast back to ToolCallMessage")
+	if state.Messages[5].Type() != message.MessageTypeToolResult {
+		t.Fatal("Tool result type not preserved")
 	}
 }

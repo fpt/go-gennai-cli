@@ -1,14 +1,14 @@
 package ollama
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"reflect"
+    "context"
+    "encoding/json"
+    "fmt"
+    "reflect"
 
-	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
-	"github.com/fpt/go-gennai-cli/pkg/message"
-	"github.com/ollama/ollama/api"
+    "github.com/fpt/go-gennai-cli/pkg/agent/domain"
+    "github.com/fpt/go-gennai-cli/pkg/message"
+    "github.com/ollama/ollama/api"
 )
 
 // OllamaStructuredClient implements StructuredLLM for Ollama using JSON Schema
@@ -70,10 +70,10 @@ func (c *OllamaStructuredClient[T]) ChatWithStructure(ctx context.Context, messa
 		Stream: &[]bool{false}[0], // Disable streaming for structured output
 	}
 
-	// Add thinking parameter if enabled and supported
-	if enableThinking && c.core.thinking {
-		req.Options["thinking"] = true
-	}
+    // Add thinking parameter if enabled and supported (v0.11+ ThinkValue)
+    if enableThinking && c.core.thinking {
+        req.Think = &api.ThinkValue{Value: true}
+    }
 
 	// Send request to Ollama
 	resp := &api.ChatResponse{}

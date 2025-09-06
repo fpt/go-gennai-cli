@@ -2,11 +2,12 @@ package react
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pkg/errors"
 
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	"github.com/fpt/go-gennai-cli/pkg/agent/state"
@@ -185,7 +186,7 @@ func TestReAct_Invoke_ChatMessage(t *testing.T) {
 	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Run(ctx, "Hello")
 
 	if err != nil {
 		t.Fatalf("Invoke returned error: %v", err)
@@ -250,7 +251,7 @@ func TestReAct_Invoke_ToolCall(t *testing.T) {
 	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), mockAlign, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Use test tool")
+	result, err := react.Run(ctx, "Use test tool")
 
 	if err != nil {
 		t.Fatalf("Invoke returned error: %v", err)
@@ -304,7 +305,7 @@ func TestReAct_Invoke_LLMError(t *testing.T) {
 	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Run(ctx, "Hello")
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -341,7 +342,7 @@ func TestReAct_Invoke_ToolError(t *testing.T) {
 	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Use test tool")
+	result, err := react.Run(ctx, "Use test tool")
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
@@ -351,9 +352,10 @@ func TestReAct_Invoke_ToolError(t *testing.T) {
 		t.Error("Expected nil result on error")
 	}
 
-	// Check that the error contains the expected error message
-	if err.Error() != "failed to handle tool call: tool execution failed: tool error" {
-		t.Errorf("Expected 'failed to handle tool call: tool execution failed: tool error', got '%v'", err)
+	// With the new behavior, tool errors should be captured in the response, not cause agent failure
+	// Check that agent continues running and eventually hits max iterations
+	if !strings.Contains(err.Error(), "exceeded maximum loop limit") {
+		t.Errorf("Expected error to contain 'exceeded maximum loop limit', got '%v'", err)
 	}
 }
 
@@ -401,7 +403,7 @@ func TestReAct_Invoke_UnexpectedResponseType(t *testing.T) {
 	react, _ := NewReAct(mockLLM, mockToolManager, state.NewMessageState(), &mockAligner{}, 10)
 
 	ctx := context.Background()
-	result, err := react.Invoke(ctx, "Hello")
+	result, err := react.Run(ctx, "Hello")
 
 	if err == nil {
 		t.Fatal("Expected error for unexpected response type, got nil")
@@ -412,8 +414,8 @@ func TestReAct_Invoke_UnexpectedResponseType(t *testing.T) {
 	}
 
 	expectedError := "unexpected response type: *react.unexpectedMessage"
-	if err.Error() != expectedError {
-		t.Errorf("Expected '%s', got '%s'", expectedError, err.Error())
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Errorf("Expected error to contain '%s', got '%s'", expectedError, err.Error())
 	}
 }
 
@@ -489,17 +491,17 @@ func TestReAct_handleToolCall_Error(t *testing.T) {
 	ctx := context.Background()
 	result, err := react.handleToolCall(ctx, toolCallMessage)
 
-	if err == nil {
-		t.Fatal("Expected error, got nil")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if result != nil {
-		t.Error("Expected nil result on error")
+	if result == nil {
+		t.Fatal("Expected result, got nil")
 	}
 
-	// Check that the error contains the expected error message
-	if err.Error() != "tool execution failed: tool execution failed" {
-		t.Errorf("Expected 'tool execution failed: tool execution failed', got '%v'", err)
+	// Check that the result contains the error message
+	if !strings.Contains(result.Content(), "Tool execution failed: tool execution failed") {
+		t.Errorf("Expected result to contain 'Tool execution failed: tool execution failed', got %v", result.Content())
 	}
 }
 
@@ -528,13 +530,13 @@ func TestReAct_StateManagement(t *testing.T) {
 	ctx := context.Background()
 
 	// First invocation
-	_, err := react.Invoke(ctx, "Hello")
+	_, err := react.Run(ctx, "Hello")
 	if err != nil {
 		t.Fatalf("First invoke error: %v", err)
 	}
 
 	// Second invocation - should have previous messages
-	_, err = react.Invoke(ctx, "How are you?")
+	_, err = react.Run(ctx, "How are you?")
 	if err != nil {
 		t.Fatalf("Second invoke error: %v", err)
 	}
@@ -557,8 +559,8 @@ func TestReAct_compaction(t *testing.T) {
 		{
 			name:              "SmallConversationCompacted",
 			initialMessages:   30,
-			expectedCompacted: true,  // Changed: token-based compaction detects high usage
-			expectedFinal:     11,    // Changed: 1 summary + 10 recent
+			expectedCompacted: true, // Changed: token-based compaction detects high usage
+			expectedFinal:     11,   // Changed: 1 summary + 10 recent
 			description:       "Should compact when token usage is high regardless of message count",
 		},
 		{
@@ -571,8 +573,8 @@ func TestReAct_compaction(t *testing.T) {
 		{
 			name:              "EdgeCaseHighUsage",
 			initialMessages:   50,
-			expectedCompacted: true,  // Changed: token-based compaction detects high usage
-			expectedFinal:     11,    // Changed: 1 summary + 10 recent  
+			expectedCompacted: true, // Changed: token-based compaction detects high usage
+			expectedFinal:     11,   // Changed: 1 summary + 10 recent
 			description:       "Should compact when token usage is high (50 messages * 1500 tokens = 75K in 25K context)",
 		},
 		{

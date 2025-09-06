@@ -1,12 +1,12 @@
 package ollama
 
 import (
-	"encoding/base64"
-	"fmt"
+    "encoding/base64"
+    "fmt"
 
-	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
-	"github.com/fpt/go-gennai-cli/pkg/message"
-	"github.com/ollama/ollama/api"
+    pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
+    "github.com/fpt/go-gennai-cli/pkg/message"
+    "github.com/ollama/ollama/api"
 )
 
 // Package-level logger for Ollama utility operations
@@ -128,59 +128,38 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 func convertToOllamaTools(tools map[message.ToolName]message.Tool) api.Tools {
 	var ollamaTools api.Tools
 
-	for _, tool := range tools {
-		// Create parameter definitions for the tool
-		properties := make(map[string]struct {
-			Type        api.PropertyType `json:"type"`
-			Items       any              `json:"items,omitempty"`
-			Description string           `json:"description"`
-			Enum        []any            `json:"enum,omitempty"`
-		})
-		var required []string
+    for _, tool := range tools {
+        // Create parameter definitions for the tool (v0.11 typed structures)
+        properties := make(map[string]api.ToolProperty)
+        var required []string
 
-		for _, arg := range tool.Arguments() {
-			properties[string(arg.Name)] = struct {
-				Type        api.PropertyType `json:"type"`
-				Items       any              `json:"items,omitempty"`
-				Description string           `json:"description"`
-				Enum        []any            `json:"enum,omitempty"`
-			}{
-				Type:        api.PropertyType{arg.Type},
-				Description: string(arg.Description),
-			}
-			if arg.Required {
-				required = append(required, string(arg.Name))
-			}
-		}
+        for _, arg := range tool.Arguments() {
+            properties[string(arg.Name)] = api.ToolProperty{
+                Type:        api.PropertyType{arg.Type},
+                Description: string(arg.Description),
+            }
+            if arg.Required {
+                required = append(required, string(arg.Name))
+            }
+        }
 
-		toolFunction := api.ToolFunction{
-			Name:        string(tool.Name()),
-			Description: tool.Description().String(),
-			Parameters: struct {
-				Type       string   `json:"type"`
-				Defs       any      `json:"$defs,omitempty"`
-				Items      any      `json:"items,omitempty"`
-				Required   []string `json:"required"`
-				Properties map[string]struct {
-					Type        api.PropertyType `json:"type"`
-					Items       any              `json:"items,omitempty"`
-					Description string           `json:"description"`
-					Enum        []any            `json:"enum,omitempty"`
-				} `json:"properties"`
-			}{
-				Type:       "object",
-				Properties: properties,
-				Required:   required,
-			},
-		}
+        toolFunction := api.ToolFunction{
+            Name:        string(tool.Name()),
+            Description: tool.Description().String(),
+            Parameters: api.ToolFunctionParameters{
+                Type:       "object",
+                Properties: properties,
+                Required:   required,
+            },
+        }
 
-		ollamaTool := api.Tool{
-			Type:     "function",
-			Function: toolFunction,
-		}
+        ollamaTool := api.Tool{
+            Type:     "function",
+            Function: toolFunction,
+        }
 
-		ollamaTools = append(ollamaTools, ollamaTool)
-	}
+        ollamaTools = append(ollamaTools, ollamaTool)
+    }
 
 	return ollamaTools
 }

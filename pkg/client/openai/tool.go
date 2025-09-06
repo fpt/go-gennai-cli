@@ -61,13 +61,13 @@ func convertArgumentToProperty(arg message.ToolArgument) map[string]interface{} 
 		}
 	}
 
-	// TODO: Future enhancement - detect and use raw JSON schema if available
-	// This could check if the tool has access to original schema information:
-	// if schemaProvider, ok := tool.(interface{ GetJSONSchema(argName string) map[string]interface{} }); ok {
-	//     if rawSchema := schemaProvider.GetJSONSchema(string(arg.Name)); rawSchema != nil {
-	//         return rawSchema
-	//     }
-	// }
+	// Use explicit properties if available
+	if len(arg.Properties) > 0 {
+		// Merge explicit properties with the base property
+		for k, v := range arg.Properties {
+			property[k] = v
+		}
+	}
 
 	return property
 }

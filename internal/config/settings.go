@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/fpt/go-gennai-cli/internal/infra"
+	"github.com/fpt/go-gennai-cli/internal/repository"
 	"github.com/fpt/go-gennai-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/go-gennai-cli/pkg/logger"
 )
@@ -18,6 +20,9 @@ type Settings struct {
 	LLM   LLMSettings   `json:"llm"`
 	MCP   MCPSettings   `json:"mcp"`
 	Agent AgentSettings `json:"agent"`
+
+	// Repository for persistence (nil for in-memory only)
+	settingsRepository repository.SettingsRepository `json:"-"`
 }
 
 // LLMSettings contains LLM client configuration
@@ -40,47 +45,95 @@ type AgentSettings struct {
 	LogLevel      string `json:"log_level"`
 }
 
+// NewSettings creates new settings with in-memory repository
+func NewSettings() *Settings {
+	return NewSettingsWithRepository(infra.NewInMemorySettingsRepository())
+}
+
+// NewSettingsWithRepository creates new settings with injected repository
+func NewSettingsWithRepository(settingsRepository repository.SettingsRepository) *Settings {
+	settings := GetDefaultSettings()
+	settings.settingsRepository = settingsRepository
+	return settings
+}
+
+// NewSettingsWithPath creates new settings with file-based repository
+func NewSettingsWithPath(configPath string) *Settings {
+	repo := infra.NewFileSettingsRepository(configPath)
+	return NewSettingsWithRepository(repo)
+}
+
+// Load loads settings from the repository
+func (s *Settings) Load() error {
+	if s.settingsRepository == nil {
+		return fmt.Errorf("no settings repository configured")
+	}
+
+	data, err := s.settingsRepository.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load settings: %w", err)
+	}
+
+	if err := json.Unmarshal(data, s); err != nil {
+		return fmt.Errorf("failed to parse settings: %w", err)
+	}
+
+	// Apply defaults for missing fields
+	applyDefaults(s)
+	return nil
+}
+
+// Save saves settings to the repository
+func (s *Settings) Save() error {
+	if s.settingsRepository == nil {
+		return fmt.Errorf("no settings repository configured")
+	}
+
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	return s.settingsRepository.Save(data)
+}
+
 // LoadSettings loads application settings from a JSON file
 func LoadSettings(configPath string) (*Settings, error) {
-	// If config path is empty, search in order of preference
+	// Create settings with file repository
+	settings := NewSettingsWithPath(configPath)
+
+	// If config path is empty, search for existing settings file
 	if configPath == "" {
-		configPath = findSettingsFile()
-		if configPath == "" {
+		foundPath, _ := settings.settingsRepository.FindSettingsFile()
+		if foundPath == "" {
 			// No settings file found, create default one and return defaults
 			return createDefaultSettingsFile()
 		}
 	}
 
-	// Check if specified file exists, create defaults if not
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// If a specific path was provided but doesn't exist, create it
+	// Try to load settings
+	err := settings.Load()
+	if err != nil {
+		// If file doesn't exist and a specific path was provided, create it
 		if configPath != "" {
-			settings, _ := createSettingsFileAtPath(configPath)
-			return settings, nil
+			createdSettings, _ := createSettingsFileAtPath(configPath)
+			return createdSettings, nil
 		}
+		// Otherwise return defaults
 		return GetDefaultSettings(), nil
 	}
 
-	// Read and parse the configuration file
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read settings file: %w", err)
-	}
-
-	var settings Settings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("failed to parse settings: %w", err)
-	}
-
-	// Apply defaults for missing fields
-	applyDefaults(&settings)
-
-	return &settings, nil
+	return settings, nil
 }
 
 // SaveSettings saves application settings to a JSON file
 func SaveSettings(configPath string, settings *Settings) error {
-	// If config path is empty, determine where to save
+	if settings.settingsRepository != nil {
+		// Use the injected repository
+		return settings.Save()
+	}
+
+	// Fallback to direct file operations (for backward compatibility)
 	if configPath == "" {
 		// Try to find existing settings file first
 		configPath = findSettingsFile()
@@ -259,23 +312,13 @@ func createDefaultSettingsFile() (*Settings, error) {
 
 // createSettingsFileAtPath creates a default settings file at the specified path
 func createSettingsFileAtPath(settingsPath string) (*Settings, error) {
-	// Get default settings
-	settings := GetDefaultSettings()
+	// Create settings with file repository
+	settings := NewSettingsWithPath(settingsPath)
 
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
-		return settings, nil // Return defaults if directory creation fails
-	}
-
-	// Marshal to JSON with pretty formatting
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return settings, nil // Return defaults if marshaling fails
-	}
-
-	// Write to file
-	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
-		return settings, nil // Return defaults if file writing fails
+	// Save default settings to file
+	if err := settings.Save(); err != nil {
+		// Return defaults without repository if saving fails
+		return GetDefaultSettings(), nil
 	}
 
 	// Log success message

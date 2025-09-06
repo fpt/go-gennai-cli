@@ -2,7 +2,8 @@ package domain
 
 import (
 	"context"
-	"errors"
+
+	"github.com/pkg/errors"
 
 	"github.com/fpt/go-gennai-cli/pkg/message"
 )

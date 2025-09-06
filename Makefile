@@ -25,6 +25,9 @@ lint: ## Run linters
 fmt: ## Format code
 	gofmt -s -w .
 
+fix: ## Fix code issues
+	golangci-lint run --fix
+
 integ: build ## Matrix integration test (testcases × backends)
 	CLI=output/gennai ./testsuite/matrix_runner.sh
 

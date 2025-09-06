@@ -6,11 +6,10 @@ require (
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/anthropics/anthropic-sdk-go v1.5.0
 	github.com/chzyer/readline v1.5.1
-	github.com/hexops/gotextdiff v1.0.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mark3labs/mcp-go v0.34.0
-	github.com/ollama/ollama v0.9.6
+	github.com/ollama/ollama v0.11.10
 	github.com/openai/openai-go/v2 v2.0.2
 	github.com/pkg/errors v0.9.1
 	golang.org/x/term v0.31.0
