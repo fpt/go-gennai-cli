@@ -33,4 +33,5 @@ type HistoryState struct {
 type MessageHistoryRepository interface {
 	Load() ([]message.Message, error)
 	Save(messages []message.Message) error
+	Clear() error // Delete/clear the persisted session data
 }

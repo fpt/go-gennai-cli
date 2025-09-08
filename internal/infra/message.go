@@ -87,6 +87,23 @@ func (fr *MessageHistoryRepository) Save(messages []message.Message) error {
 	return nil
 }
 
+// Clear implements repository.MessageHistoryRepository
+func (fr *MessageHistoryRepository) Clear() error {
+	if fr.filePath == "" {
+		return fmt.Errorf("no file path specified")
+	}
+
+	if err := os.Remove(fr.filePath); err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, nothing to clear
+			return nil
+		}
+		return fmt.Errorf("failed to delete state file %s: %w", fr.filePath, err)
+	}
+
+	return nil
+}
+
 // messageToSerializable converts a Message interface to repository.MessageHistory
 func messageToSerializable(msg message.Message) repository.MessageHistory {
 	if msg == nil {

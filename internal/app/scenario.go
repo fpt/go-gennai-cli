@@ -403,15 +403,8 @@ func (s *ScenarioRunner) handleApprovalWorkflow(ctx context.Context, reactClient
 // ClearHistory clears the conversation history
 func (s *ScenarioRunner) ClearHistory() {
 	// Clear the shared state which affects all scenarios
+	// This also clears persisted session data via the repository
 	s.sharedState.Clear()
-
-	// Save cleared state to session file
-	if s.sessionFilePath != "" {
-		if saveErr := s.sharedState.SaveToFile(); saveErr != nil {
-			s.logger.Warn("Failed to save cleared session state",
-				"session_file", s.sessionFilePath, "error", saveErr)
-		}
-	}
 }
 
 // getToolManagerForScenario returns the appropriate tool manager for a given scenario

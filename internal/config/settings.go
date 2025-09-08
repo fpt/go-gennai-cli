@@ -179,6 +179,47 @@ func GetDefaultSettings() *Settings {
 	}
 }
 
+// GetDefaultLLMSettingsForBackend returns default LLM settings for a specific backend
+func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
+	switch backend {
+	case "ollama":
+		return LLMSettings{
+			Backend:   "ollama",
+			Model:     "gpt-oss:latest",
+			BaseURL:   "http://localhost:11434",
+			Thinking:  true,
+			MaxTokens: 0,
+		}
+	case "anthropic", "claude":
+		return LLMSettings{
+			Backend:   "anthropic",
+			Model:     "claude-3-7-sonnet-latest",
+			BaseURL:   "",
+			Thinking:  true,
+			MaxTokens: 0,
+		}
+	case "openai":
+		return LLMSettings{
+			Backend:   "openai",
+			Model:     "gpt-5-mini",
+			BaseURL:   "",
+			Thinking:  true,
+			MaxTokens: 0,
+		}
+	case "gemini":
+		return LLMSettings{
+			Backend:   "gemini",
+			Model:     "gemini-2.5-flash-lite",
+			BaseURL:   "",
+			Thinking:  false, // Gemini doesn't support thinking in our implementation
+			MaxTokens: 0,
+		}
+	default:
+		// Default to ollama settings for unknown backends
+		return GetDefaultLLMSettingsForBackend("ollama")
+	}
+}
+
 // applyDefaults fills in missing fields with default values
 func applyDefaults(settings *Settings) {
 	defaults := GetDefaultSettings()

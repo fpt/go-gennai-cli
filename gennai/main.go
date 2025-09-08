@@ -127,9 +127,19 @@ func main() {
 
 	// Override settings with command line arguments
 	if resolvedBackend != "" {
-		settings.LLM.Backend = resolvedBackend
-	}
-	if resolvedModel != "" {
+		// When backend is overridden, reset ALL LLM settings to defaults for that backend
+		// unless specific model is also provided
+		if resolvedModel == "" {
+			// No specific model provided, use all defaults for the backend
+			settings.LLM = config.GetDefaultLLMSettingsForBackend(resolvedBackend)
+		} else {
+			// Specific model provided, use backend defaults but override model
+			backendDefaults := config.GetDefaultLLMSettingsForBackend(resolvedBackend)
+			settings.LLM = backendDefaults
+			settings.LLM.Model = resolvedModel
+		}
+	} else if resolvedModel != "" {
+		// Only model is overridden, keep existing backend settings but change model
 		settings.LLM.Model = resolvedModel
 	}
 

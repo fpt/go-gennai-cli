@@ -11,7 +11,7 @@ type MessageState struct {
 	Metadata map[string]any    `json:"-"` // Don't serialize directly
 
 	// Repository for persistence (nil for in-memory only)
-	hisotryRepo repository.MessageHistoryRepository
+	historyRepo repository.MessageHistoryRepository
 
 	// Token counters snapshot for telemetry (not serialized)
 	tokenInput  int
@@ -32,7 +32,7 @@ func NewMessageStateWithRepository(serializedRepository repository.MessageHistor
 	return &MessageState{
 		Messages:    make([]message.Message, 0),
 		Metadata:    make(map[string]interface{}),
-		hisotryRepo: serializedRepository,
+		historyRepo: serializedRepository,
 	}
 }
 
@@ -53,9 +53,14 @@ func (c *MessageState) GetLastMessage() message.Message {
 	return c.Messages[len(c.Messages)-1]
 }
 
-// Clear clears all messages from the context
+// Clear clears all messages from the context and deletes persisted session data
 func (c *MessageState) Clear() {
 	c.Messages = make([]message.Message, 0)
+
+	// Also clear persisted data if repository is available
+	if c.historyRepo != nil {
+		_ = c.historyRepo.Clear() // Ignore error - clearing in-memory is more important
+	}
 }
 
 // ResetTokenCounters clears the internal token counters snapshot
@@ -148,19 +153,19 @@ func (c *MessageState) GetValidConversationHistory(maxMessages int) []message.Me
 
 // SaveToFile saves the message state using the repository
 func (c *MessageState) SaveToFile() error {
-	if c.hisotryRepo == nil {
+	if c.historyRepo == nil {
 		return nil // No repository configured, skip save
 	}
-	return c.hisotryRepo.Save(c.Messages)
+	return c.historyRepo.Save(c.Messages)
 }
 
 // LoadFromFile loads the message state using the repository
 func (c *MessageState) LoadFromFile() error {
-	if c.hisotryRepo == nil {
+	if c.historyRepo == nil {
 		return nil // No repository configured, skip load
 	}
 
-	messages, err := c.hisotryRepo.Load()
+	messages, err := c.historyRepo.Load()
 	if err != nil {
 		return err
 	}
