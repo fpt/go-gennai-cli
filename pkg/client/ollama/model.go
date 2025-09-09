@@ -29,6 +29,13 @@ var ollamaModels = []OllamaModel{
 		Context: 128000, // Conservative context estimate
 	},
 	{
+		Name:    "gpt-oss:20b",
+		Tool:    true,   // ✅ Confirmed: supports native tool calling perfectly
+		Think:   true,   // ✅ Confirmed: shows thinking tokens in CLI and API
+		Vision:  false,  // Unknown vision capability
+		Context: 128000, // Conservative context estimate
+	},
+	{
 		Name:    "gpt-oss:120b",
 		Tool:    true,
 		Think:   true,

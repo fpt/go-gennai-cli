@@ -24,6 +24,10 @@ type PromptBuilder struct {
 	times      []time.Time
 	workingDir string
 	fsRepo     repository.FilesystemRepository
+	// usePaste controls whether paste detection/compression and
+	// paste-block backspace behavior are active. When false, input is
+	// treated purely as typed characters with no special paste handling.
+	usePaste bool
 }
 
 // NewPromptBuilder creates a new PromptBuilder with the specified working directory and filesystem repository.
@@ -36,12 +40,19 @@ func NewPromptBuilder(fsRepo repository.FilesystemRepository, workingDir string)
 		times:      make([]time.Time, 0, 256),
 		workingDir: workingDir,
 		fsRepo:     fsRepo,
+		// Default: paste handling disabled unless explicitly enabled
+		usePaste: false,
 	}
 }
 
 // SetWorkingDir sets the working directory for file existence checks.
 func (p *PromptBuilder) SetWorkingDir(dir string) {
 	p.workingDir = dir
+}
+
+// SetUsePaste toggles paste detection/compression and paste-block backspace behavior.
+func (p *PromptBuilder) SetUsePaste(use bool) {
+	p.usePaste = use
 }
 
 // Input appends a single character to the prompt buffer.
@@ -56,53 +67,63 @@ func (p *PromptBuilder) VisiblePrompt() string {
 	if len(p.buf) == 0 {
 		return ""
 	}
-	// Replace fast-typed (pasted) contiguous regions with a short placeholder.
 	out := make([]rune, 0, len(p.buf))
-	i := 0
-	for i < len(p.buf) {
-		if i > 0 && p.times[i].Sub(p.times[i-1]) < pasteInterval {
-			// find left boundary
-			start := i - 1
-			for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
-				start--
+	if !p.usePaste {
+		// No paste compression; just sanitize newlines for display
+		for _, r := range p.buf {
+			if r == '\n' || r == '\r' {
+				r = ' '
 			}
-			// find right boundary
-			end := i
-			for end+1 < len(p.buf) && p.times[end+1].Sub(p.times[end]) < pasteInterval {
-				end++
-			}
-			// If paste burst started at the very beginning within a small window,
-			// include the first character as part of the paste block.
-			if start == 1 && p.times[end].Sub(p.times[0]) <= initialPasteWindow {
-				start = 0
-			}
+			out = append(out, r)
+		}
+	} else {
+		// Replace fast-typed (pasted) contiguous regions with a short placeholder.
+		i := 0
+		for i < len(p.buf) {
+			if i > 0 && p.times[i].Sub(p.times[i-1]) < pasteInterval {
+				// find left boundary
+				start := i - 1
+				for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
+					start--
+				}
+				// find right boundary
+				end := i
+				for end+1 < len(p.buf) && p.times[end+1].Sub(p.times[end]) < pasteInterval {
+					end++
+				}
+				// If paste burst started at the very beginning within a small window,
+				// include the first character as part of the paste block.
+				if start == 1 && p.times[end].Sub(p.times[0]) <= initialPasteWindow {
+					start = 0
+				}
 
-			n := end - start + 1
-			if n >= minPasteBlockLen {
-				// Build preview (first 20 runes)
-				run := p.buf[start : end+1]
-				previewLen := 20
-				if n < previewLen {
-					previewLen = n
+				n := end - start + 1
+				if n >= minPasteBlockLen {
+					// Build preview (first 20 runes)
+					run := p.buf[start : end+1]
+					previewLen := 20
+					if n < previewLen {
+						previewLen = n
+					}
+					preview := string(run[:previewLen])
+					ellipsis := ""
+					if n > previewLen {
+						ellipsis = "…"
+					}
+					placeholder := []rune(fmt.Sprintf("[pasted: '%s%s', %d chars]", preview, ellipsis, n))
+					out = append(out, placeholder...)
+					i = end + 1
+					continue
 				}
-				preview := string(run[:previewLen])
-				ellipsis := ""
-				if n > previewLen {
-					ellipsis = "…"
-				}
-				placeholder := []rune(fmt.Sprintf("[pasted: '%s%s', %d chars]", preview, ellipsis, n))
-				out = append(out, placeholder...)
-				i = end + 1
-				continue
+				// If below threshold, do not compress; fall through to append current rune normally.
 			}
-			// If below threshold, do not compress; fall through to append current rune normally.
+			r := p.buf[i]
+			if r == '\n' || r == '\r' {
+				r = ' '
+			}
+			out = append(out, r)
+			i++
 		}
-		r := p.buf[i]
-		if r == '\n' || r == '\r' {
-			r = ' '
-		}
-		out = append(out, r)
-		i++
 	}
 
 	// Apply @filename highlighting to the compressed output
@@ -203,24 +224,26 @@ func (p *PromptBuilder) Backspace() {
 		return
 	}
 
-	// If the last two runes were entered within pasteInterval, treat the
-	// trailing contiguous fast-typed region as a single unit and delete it.
-	if n >= 2 && p.times[n-1].Sub(p.times[n-2]) < pasteInterval {
-		// Find left boundary (matching VisiblePrompt compression rule)
-		start := n - 2
-		for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
-			start--
-		}
-		// If the burst began near the start and stayed within the initial window, include first char.
-		if start == 1 && p.times[n-1].Sub(p.times[0]) <= initialPasteWindow {
-			start = 0
-		}
-		blockLen := n - start
-		if blockLen >= minPasteBlockLen {
-			// Delete [start..n-1]
-			p.buf = append(p.buf[:start], p.buf[n:]...)
-			p.times = append(p.times[:start], p.times[n:]...)
-			return
+	if p.usePaste {
+		// If the last two runes were entered within pasteInterval, treat the
+		// trailing contiguous fast-typed region as a single unit and delete it.
+		if n >= 2 && p.times[n-1].Sub(p.times[n-2]) < pasteInterval {
+			// Find left boundary (matching VisiblePrompt compression rule)
+			start := n - 2
+			for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
+				start--
+			}
+			// If the burst began near the start and stayed within the initial window, include first char.
+			if start == 1 && p.times[n-1].Sub(p.times[0]) <= initialPasteWindow {
+				start = 0
+			}
+			blockLen := n - start
+			if blockLen >= minPasteBlockLen {
+				// Delete [start..n-1]
+				p.buf = append(p.buf[:start], p.buf[n:]...)
+				p.times = append(p.times[:start], p.times[n:]...)
+				return
+			}
 		}
 	}
 	// Otherwise, delete one rune

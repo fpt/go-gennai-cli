@@ -529,7 +529,6 @@ if toolCall, ok := resp.(*message.ToolCallMessage); ok {
 
 **Approval Modes:**
 - **Interactive**: Prompts user with Yes/Always/No options
-- **Auto-Approve**: Bypasses all prompts via `--auto-approve` flag
 - **Non-Interactive**: Auto-approves with logged notifications in pipe/script mode
 
 **Interactive Mode:**

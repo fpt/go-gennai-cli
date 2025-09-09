@@ -1,23 +1,22 @@
 # GENNAI CLI
 
-A CLI-based AI coding agent supporting multiple LLM backends, using ReAct (Reason and Act) pattern and MessageState with compaction to interact with tools, maintaining context.
+A CLI-based AI coding agent supporting multiple LLM backends, using the ReAct (Reason and Act) pattern and MessageState with compaction to interact with tools while maintaining context.
 
-Default scenario focuses on coding tasks with ToDo management, various built-in tools, and user-configured tools via MCP client functionality.
+The default scenario focuses on coding tasks with todo management, built-in tools, and user-configured tools via MCP client functionality.
 
-The name, GENNAI (pronounces Gen-Nai) comes from both 'GENeric ageNt for AI' and Gennai Hiraga, a historic inventor of Japan.
+The name GENNAI (pronounced "Gen-nai") comes from both "GENeric ageNt for AI" and Gennai Hiraga, a historic Japanese inventor.
 
 ## Features
 
 - **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory
-- **Multiple LLM Backends**: Support for Ollama (gpt-oss), Anthropic Claude, OpenAI GPT, and Google Gemini (Experimental)
-- **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for better performance
+- **Multiple LLM Backends**: Support for Ollama (gpt-oss), Anthropic Claude, OpenAI GPT, and Google Gemini
+- **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for simplicity
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
+- **Secure File Access**: Files are accessible only in working directory. Also, applies Read-before-Write semantics for content updates.
 - **Smart Tool Approval**: Interactive approval system for potentially destructive operations (Write, Edit, MultiEdit)
 - **MCP Server Support**: MCP Servers can be configured in settings.json
-- **Event-Driven Architecture**: Clean separation between agent logic and output formatting via events
 - **Conversation State Management**: Automatic handling of conversation history and context
-- **Token Usage & Caching Foundations**: Per‑client token usage reporting (OpenAI supported) and provider‑native caching hints (session/prompt caching)
-- **Clean Output System**: ScenarioRunner streams thinking to an injected `io.Writer`; logs use Info/Debug intentions for console icons while file logs store structured `intention` fields.
+- **AGENTS.md support**: Includes content of AGENTS.md to system prompt automatically
 
 ## Quick Start
 
@@ -32,6 +31,7 @@ go install github.com/fpt/go-gennai-cli/gennai@latest
 **For Ollama (default):**
 - Install Ollama: https://ollama.ai/
 - Pull a model: `ollama pull gpt-oss:latest`
+- Set `OLLAMA_HOST` and `OLLAMA_PORT` environment variable if needed.
 
 **For Anthropic Claude:**
 - Set `ANTHROPIC_API_KEY` environment variable
@@ -39,51 +39,49 @@ go install github.com/fpt/go-gennai-cli/gennai@latest
 **For OpenAI:**
 - Set `OPENAI_API_KEY` environment variable
 
-NOTE: OpenAI is not tested at this moment.
-
-**For Google Gemini (has limitation):**
+**For Google Gemini:**
 - Set `GEMINI_API_KEY` environment variable
 
 ### Basic Usage
 
 **Interactive Mode (default):**
 ```bash
-# Start interactive REPL
-go run gennai/main.go
+# Start the interactive REPL
+gennai
 
-# Interactive with Anthropic Claude
-go run gennai/main.go -b anthropic
+# Or interactive with Anthropic Claude
+gennai -b anthropic
 
-# Interactive with approval bypass (always approve file operations)
-go run gennai/main.go --auto-approve
+# Then use commands like:
+> Create an HTTP server with a health check
+> Analyze the current codebase structure
+> Write unit tests for this package
+> List files in the current directory
+> Run go build and fix any errors
+> /help    # Show available commands
+> /clear   # Clear conversation history
+> /quit    # Exit interactive mode
 ```
 
 **One-shot Mode:**
 ```bash
-# Run single command with default model
-go run gennai/main.go "Create a HTTP server with health check endpoint"
+# Run a single command with the default model
+gennai "Create an HTTP server with a health check endpoint"
 
 # Use different backends
-go run gennai/main.go -b anthropic "Analyze this codebase"
-go run gennai/main.go -b openai -m gpt-4o "Create a REST API"
-go run gennai/main.go -b gemini -m gemini-2.5-flash-lite "Optimize this code"
+gennai -b anthropic "Analyze this codebase"
+gennai -b openai -m gpt-5-mini "Create a console program which calculates fibonacci number in Golang."
 
-# Work in specific directory
-go run gennai/main.go -workdir testbench "Create a simple web server"
-
-# One-shot with auto-approval (for scripts/automation)
-go run gennai/main.go --auto-approve "Refactor this code and fix any issues"
+# Offline use
+gennai -b ollama -m gpt-oss:latest "Write a simple main.go that prints 'Hello, world!'. Use write tool."
 ```
 
-### Build and Install
+## Supported Models
 
-```bash
-# Build the binary
-go build -o gennai ./gennai
-
-# Run the binary
-./gennai "Your task description here"
-```
+- **Anthropic**: `claude-3-7-sonnet-latest`, `claude-sonnet-4-20250514`
+- **OpenAI**: `gpt-5`, `gpt-5-mini`
+- **Ollama**: `gpt-oss:latest`
+- **Google Gemini**: `gemini-2.5`, `gemini-2.5-flash`
 
 ## Tool Approval System
 
@@ -104,7 +102,7 @@ GENNAI includes a smart approval system that prompts for confirmation before exe
 **Approval Options:**
 - **Yes** - Approve this operation only
 - **Always** - Approve this operation and auto-approve all future file operations in this session
-- **No** - Cancel the operation and continue conversation
+- **No** - Cancel the operation and continue the conversation
 
 ### Approval Modes
 
@@ -116,16 +114,6 @@ GENNAI includes a smart approval system that prompts for confirmation before exe
 ? Approve this file operation? (Yes/Always/No)
 ```
 
-**Auto-Approval Mode:**
-```bash
-# Skip all approval prompts (useful for automation/scripts)
-go run gennai/main.go --auto-approve "Refactor all Go files in this project"
-
-# Or set via environment variable
-export GENNAI_AUTO_APPROVE=true
-go run gennai/main.go "Create and update multiple configuration files"
-```
-
 **Non-Interactive Mode:**
 When running in non-interactive environments (pipes, scripts), operations are automatically approved with logged notifications.
 
@@ -133,9 +121,9 @@ When running in non-interactive environments (pipes, scripts), operations are au
 
 ### Unified Settings (settings.json)
 
-GENNAI CLI uses a unified configuration system with settings stored in `~/.gennai/settings.json`. 
+GENNAI CLI uses a unified configuration system with settings stored in `~/.gennai/settings.json`.
 
-**Automatic Setup**: When you first run GENNAI, it automatically creates a default `~/.gennai/settings.json` file with example configurations that you can easily modify.
+**Automatic Setup**: When you first run GENNAI, it automatically creates a default `~/.gennai/settings.json` file with example configurations that you can modify.
 
 **💡 To enable MCP servers**: Change `"enabled": false` to `"enabled": true` and update the server configuration with your actual MCP server details.
 
@@ -152,7 +140,7 @@ GENNAI CLI uses a unified configuration system with settings stored in `~/.genna
 gennai -b anthropic -m claude-3-7-sonnet-latest "Analyze this code"
 
 # Use custom settings file
-gennai --settings ./my-settings.json "Create a web server"
+gennai --settings ./my-settings.json "Create a simple web server in Golang."
 ```
 
 ### MCP (Model Context Protocol) Integration
@@ -163,86 +151,25 @@ gennai --settings ./my-settings.json "Create a web server"
 - **Allowed Tools (optional)**: Limit context size by specifying only needed tools. If omitted, all tools from the server are allowed.
 - **Environment Variables**: Set per-server environment
 
-**Example MCP Servers:**
-
-This is an example of [godevmcp](https://github.com/fpt/go-dev-mcp).
+**Example MCP Server (godevmcp):**
 
 ```json
 {
   "mcp": {
     "servers": [
       {
-        "name": "godevmcp", 
+        "name": "godevmcp",
         "enabled": true,
         "type": "stdio",
         "command": "godevmcp",
-        "args": ["serve"],
-        // Optional: if omitted, all server tools are allowed
-        "allowed_tools": ["tree_dir", "search_local_files", "read_godoc"]
+        "args": ["serve"]
       }
     ]
   }
 }
 ```
 
-**MCP Features:**
-- **Graceful Degradation**: Continues running if MCP servers fail to connect
-- **Per-Scenario Access**: Only scenarios that explicitly request MCP tools get access
-- **Multiple Server Support**: Connect to multiple MCP servers simultaneously
-- **Tool Filtering**: `allowed_tools` is optional; by default all tools are allowed. Use it to reduce context size and improve performance when needed.
-
-## Supported Models
-
-- **Anthropic (Recommended)**: `claude-sonnet-4-20250514`, `claude-opus-4-20250514`, `claude-3-7-sonnet-latest`, `claude-3-5-haiku-latest`
-- **OpenAI**: `gpt-5`, `gpt-5-mini`, `gpt-4o`, `gpt-4o-mini`
-- **Ollama**: `gpt-oss:latest`, `gpt-oss:120b`
-- **Google Gemini (Not recommended)**: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`
-
-## Example Usage
-
-**Scenario Selection:**
-GENNAI CLI uses the 'code' scenario by default for comprehensive development tasks:
-
-```bash
-# All these use the default 'code' scenario
-go run gennai/main.go "Create a HTTP server"
-go run gennai/main.go "Fix compilation errors" 
-go run gennai/main.go "Write unit tests"
-go run gennai/main.go "Analyze this codebase"
-go run gennai/main.go "List files in this directory"
-
-# Use 'respond' scenario for knowledge-based responses
-go run gennai/main.go -s respond "Explain channels in Go"
-go run gennai/main.go -s respond "What are Go best practices?"
-```
-
-**Interactive Mode:**
-```bash
-# Start interactive mode
-go run gennai/main.go
-
-# Then use commands like:
-> Create a HTTP server with health check
-> Analyze the current codebase structure  
-> Write unit tests for this package
-> List files in the current directory
-> Run go build and fix any errors
-> /help    # Show available commands
-> /clear   # Clear conversation history
-> /quit    # Exit interactive mode
-```
-
 ## Development
-
-### Output and Logging
-
-- **ScenarioRunner Writer**: The runner accepts an `io.Writer` and streams thinking output to it (REPL, tests, or gRPC).
-- **Unified Console Writer**: The global logger can target the same writer via `SetGlobalLoggerWithConsoleWriter` so agent logs and thinking share one sink.
-- **Intentions**: Only Info/Debug logs carry an `intention` tag (e.g., `tool`, `status`, `statistics`); Warn/Error rely purely on level.
-- **Console vs File Logs**: Console renders icons based on intention; file logs are plain with `intention=...` as structured metadata in `~/.gennai/logs/gennai.log`.
-- **Model-Facing Text**: Tool outputs returned to models avoid emojis and use plain PASS/FAIL/ERROR phrasing.
-
-For detailed development information, architecture details, and contributing guidelines, see:
 
 **[📖 Development Guide](doc/DEVELOPMENT.md)**
 
@@ -254,13 +181,15 @@ This includes:
 - Project structure and contribution workflow
 - Model capabilities and integration testing
 
-## ⚠️ Important Notices
+## AGENTS.md
 
-### Token Usage & Provider‑Native Caching
-- GENNAI exposes a foundation for per‑client token usage monitoring and provider‑native caching hints (no local cache layer).
-- OpenAI (Responses API) currently reports token usage; other clients will add support when their SDKs expose usage.
-- Provider‑side prompt caching (e.g., OpenAI Prompt Caching) can be enabled via client options when supported by the SDK.
-  - Reference: https://platform.openai.com/docs/guides/prompt-caching
+This repository includes AGENTS.md — a short developer guide for automated agents and contributors describing available tools, workflows, and safety expectations.
+
+## At‑mark file embedding ("@filename" syntax)
+
+You can reference files in prompts using @filename. GENNAI expands @filename into the file's contents when sending prompts to the model; if a file can't be read, a note is left in place. See internal/app/prompt_builder.go for implementation details.
+
+## ⚠️ Important Notices
 
 ### Responsible Use
 - This tool is provided for research and development purposes
@@ -286,8 +215,11 @@ gennai automatically tests unknown Ollama models for tool-calling capability:
 - 🚫 **Non-tool-capable models** will have limited functionality (no file operations, web search, etc.)
 
 ### Disclaimer
+
 This software is provided "as is" under the Apache 2.0 License without warranty of any kind. The developers are not responsible for any damage, data loss, API costs, or misuse resulting from the use of this software.
 
 ## License
+
+Copyright 2025 Youichi Fujimoto. All rights reserved.
 
 This project is licensed under the Apache 2.0 License.

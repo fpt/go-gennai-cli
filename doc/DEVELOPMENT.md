@@ -237,7 +237,6 @@ func (s *ScenarioRunner) handleApprovalWorkflow(ctx context.Context, reactClient
 
 **Approval Modes:**
 - **Interactive**: Prompts user with Yes/Always/No options using promptui
-- **Auto-Approve**: Bypasses all prompts via `--auto-approve` flag or `GENNAI_AUTO_APPROVE` env var
 - **Non-Interactive**: Auto-approves with logged notifications when running in pipes/scripts
 
 ### Domain-Driven Design (DDD) and Dependency Injection (DI) Pattern

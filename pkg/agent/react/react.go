@@ -286,12 +286,17 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 		// Annotate and log token usage when available
 		r.annotateAndLogUsage(resp)
 
-		// Check tool call if it requires user's approval (file writing operations)
+		// Check tool call if it requires user's approval (file writing operations and bash commands)
 		if toolCall, ok := resp.(*message.ToolCallMessage); ok {
 			toolName := string(toolCall.ToolName())
 
-			// Only require approval for potentially destructive file operations
+			// Check for file operations that require approval
 			requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+
+			// Check for bash commands that may require approval
+			if !requiresApproval && (toolName == "bash") {
+				requiresApproval = r.bashCommandRequiresApproval(toolCall)
+			}
 
 			if requiresApproval {
 				r.pendingToolCall = toolCall
@@ -561,4 +566,70 @@ func (r *ReAct) estimateContextWindow() int {
 	default:
 		return 100000 // Conservative fallback for unknown models
 	}
+}
+
+// bashCommandRequiresApproval checks if a bash command requires user approval
+func (r *ReAct) bashCommandRequiresApproval(toolCall *message.ToolCallMessage) bool {
+	toolName := string(toolCall.ToolName())
+	args := toolCall.ToolArguments()
+
+	var command string
+
+	// Extract command based on tool type
+	switch toolName {
+	case "bash":
+		if cmd, ok := args["command"].(string); ok {
+			command = cmd
+		}
+	case "go_build":
+		// go_build is always safe and whitelisted
+		return false
+	case "go_run":
+		// go_run is always safe and whitelisted
+		return false
+	default:
+		return false
+	}
+
+	if command == "" {
+		return false
+	}
+
+	// Check if command is whitelisted using default whitelist
+	// Note: This uses a hardcoded whitelist that should match the settings defaults
+	// In the future, this could be improved by accessing the actual settings
+	return r.isCommandNotWhitelisted(command)
+}
+
+// isCommandNotWhitelisted checks if a command is not in the default whitelist
+// This is a simplified version that should match the BashToolManager logic
+func (r *ReAct) isCommandNotWhitelisted(command string) bool {
+	// Default whitelist (should match settings defaults)
+	defaultWhitelist := []string{
+		"go build", "go test", "go run", "go mod tidy", "go fmt", "go vet",
+		"git status", "git log", "git diff",
+		"ls", "pwd", "cat", "head", "tail", "grep", "find", "echo", "which",
+		"make", "npm install", "npm run", "npm test",
+	}
+
+	command = strings.TrimSpace(command)
+
+	for _, whitelisted := range defaultWhitelist {
+		if strings.HasPrefix(command, whitelisted) {
+			// Make sure it's a complete word match
+			if len(command) == len(whitelisted) {
+				return false
+			}
+			// Check if next character is a space (allowing arguments)
+			if len(command) > len(whitelisted) {
+				nextChar := command[len(whitelisted)]
+				if nextChar == ' ' || nextChar == '\t' {
+					return false
+				}
+			}
+		}
+	}
+
+	// Command not in whitelist, requires approval
+	return true
 }

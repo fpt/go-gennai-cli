@@ -110,8 +110,9 @@ func NewScenarioRunnerWithOptions(llmClient domain.LLM, workingDir string, mcpTo
 	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 
 	bashConfig := tool.BashConfig{
-		WorkingDir:  workingDir,
-		MaxDuration: 2 * time.Minute,
+		WorkingDir:          workingDir,
+		MaxDuration:         2 * time.Minute,
+		WhitelistedCommands: settings.Bash.WhitelistedCommands,
 	}
 	bashToolManager := tool.NewBashToolManager(bashConfig)
 

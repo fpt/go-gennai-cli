@@ -96,6 +96,8 @@ func TestPromptBuilder_PasteDetectionVisibleDiff(t *testing.T) {
 func TestPromptBuilder_BackspaceDeletesWholePasteBlock(t *testing.T) {
 	fsRepo := infra.NewOSFilesystemRepository()
 	pb := NewPromptBuilder(fsRepo, "")
+	// Enable paste handling for this test scenario
+	pb.SetUsePaste(true)
 	// Slow first char
 	pb.Input('H')
 	// Simulate a clear pause before paste so first char is not part of paste
