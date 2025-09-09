@@ -14,15 +14,17 @@ import (
 
 // BashToolManager provides shell command execution capabilities
 type BashToolManager struct {
-	tools       map[message.ToolName]message.Tool
-	workingDir  string
-	maxDuration time.Duration
+	tools               map[message.ToolName]message.Tool
+	workingDir          string
+	maxDuration         time.Duration
+	whitelistedCommands []string // Commands that don't require approval
 }
 
 // BashConfig holds configuration for the bash tool manager
 type BashConfig struct {
-	WorkingDir  string        `json:"working_dir"`  // Working directory for commands
-	MaxDuration time.Duration `json:"max_duration"` // Maximum execution time (default: 2 minutes)
+	WorkingDir          string        `json:"working_dir"`          // Working directory for commands
+	MaxDuration         time.Duration `json:"max_duration"`         // Maximum execution time (default: 2 minutes)
+	WhitelistedCommands []string      `json:"whitelisted_commands"` // Commands that don't require approval
 }
 
 // NewBashToolManager creates a new bash tool manager
@@ -32,9 +34,10 @@ func NewBashToolManager(config BashConfig) *BashToolManager {
 	}
 
 	manager := &BashToolManager{
-		tools:       make(map[message.ToolName]message.Tool),
-		workingDir:  config.WorkingDir,
-		maxDuration: config.MaxDuration,
+		tools:               make(map[message.ToolName]message.Tool),
+		workingDir:          config.WorkingDir,
+		maxDuration:         config.MaxDuration,
+		whitelistedCommands: config.WhitelistedCommands,
 	}
 
 	// Register bash tools
@@ -147,6 +150,37 @@ func (m *BashToolManager) resolvePath(path string) (string, error) {
 
 	// If no working directory set, resolve against current directory
 	return filepath.Abs(path)
+}
+
+// IsCommandWhitelisted checks if a command is in the whitelist (doesn't require approval)
+func (m *BashToolManager) IsCommandWhitelisted(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+
+	// Check if command starts with any whitelisted command
+	for _, whitelisted := range m.whitelistedCommands {
+		if strings.HasPrefix(command, whitelisted) {
+			// Make sure it's a complete word match (not just prefix)
+			if len(command) == len(whitelisted) {
+				return true
+			}
+			// Check if next character is a space or flag (allowing arguments)
+			if len(command) > len(whitelisted) {
+				nextChar := command[len(whitelisted)]
+				if nextChar == ' ' || nextChar == '\t' {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// RequiresApproval checks if a bash command requires user approval
+func (m *BashToolManager) RequiresApproval(command string) bool {
+	return !m.IsCommandWhitelisted(command)
 }
 
 // Main Bash handler

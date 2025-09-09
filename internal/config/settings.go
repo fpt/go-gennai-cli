@@ -20,6 +20,7 @@ type Settings struct {
 	LLM   LLMSettings   `json:"llm"`
 	MCP   MCPSettings   `json:"mcp"`
 	Agent AgentSettings `json:"agent"`
+	Bash  BashSettings  `json:"bash,omitempty"`
 
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
@@ -43,6 +44,11 @@ type MCPSettings struct {
 type AgentSettings struct {
 	MaxIterations int    `json:"max_iterations"`
 	LogLevel      string `json:"log_level"`
+}
+
+// BashSettings contains bash tool configuration
+type BashSettings struct {
+	WhitelistedCommands []string `json:"whitelisted_commands,omitempty"` // Commands that don't require approval
 }
 
 // NewSettings creates new settings with in-memory repository
@@ -175,6 +181,32 @@ func GetDefaultSettings() *Settings {
 		Agent: AgentSettings{
 			MaxIterations: DefaultAgentMaxIterations,
 			LogLevel:      "info",
+		},
+		Bash: BashSettings{
+			WhitelistedCommands: []string{
+				"go build",
+				"go test",
+				"go run",
+				"go mod tidy",
+				"go fmt",
+				"go vet",
+				"git status",
+				"git log",
+				"git diff",
+				"ls",
+				"pwd",
+				"cat",
+				"head",
+				"tail",
+				"grep",
+				"find",
+				"echo",
+				"which",
+				"make",
+				"npm install",
+				"npm run",
+				"npm test",
+			},
 		},
 	}
 }
