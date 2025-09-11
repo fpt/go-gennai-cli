@@ -31,7 +31,7 @@ This document provides detailed information for developers working on GENNAI CLI
 - **Client Factory**: LLM client creation and configuration using dependency injection
 - **Tool Manager**: Handles tool registration and execution with security controls
 - **Message State**: Manages conversation history and context with repository pattern
-- **Interactive REPL**: Continuous conversation interface with built-in commands
+- **Interactive REPL**: Continuous conversation interface with built-in commands and cursor-aware input handling
 
 ### Scenario-Based ReAct Workflow
 
@@ -561,6 +561,47 @@ go run gennai/main.go
 > /clear   # Clear conversation history
 > /quit    # Exit interactive mode
 ```
+
+### Cursor Positioning and Input Handling
+
+The interactive REPL provides full cursor positioning support with natural text editing behavior:
+
+**Cursor Movement:**
+- **Arrow Keys**: Navigate cursor left/right within the input line
+- **Home/End**: Jump to beginning/end of input
+- **Natural Insertion**: Type at any cursor position to insert text at that location
+- **Backspace/Delete**: Remove characters at cursor position
+
+**Implementation Architecture:**
+The cursor positioning system uses a **readline-authoritative approach** where the readline library maintains the canonical cursor state, and the PromptBuilder synchronizes from it:
+
+```go
+// PromptBuilder syncs from readline's authoritative state
+func (p *PromptBuilder) SyncFromReadline(line []rune, pos int) {
+    // Update buffer from readline's line
+    p.buf = make([]rune, len(line))
+    copy(p.buf, line)
+    
+    // Update cursor position from readline
+    if pos < 0 { pos = 0 }
+    if pos > len(p.buf) { pos = len(p.buf) }
+    p.cursorPos = pos
+}
+```
+
+**Key Design Decisions:**
+- **Single Source of Truth**: Readline handles all cursor movement and input events natively
+- **State Synchronization**: PromptBuilder follows readline's state rather than maintaining parallel state
+- **Minimal Event Handling**: Listener only handles special cases (Ctrl+C, Ctrl+K at start)
+- **Clean API**: Removed unused cursor manipulation methods to keep interface minimal
+
+**Benefits:**
+- **No Double-Handling**: Eliminates issues where keys were processed by both readline and custom handlers
+- **Native Feel**: Cursor behavior matches standard terminal input expectations
+- **Reliability**: Leverages readline's mature input handling rather than reimplementing it
+- **Maintainability**: Simpler codebase with clear separation of concerns
+
+This approach resolved previous issues where cursor movement and text insertion weren't working correctly, providing a seamless editing experience in interactive mode.
 
 ### Integration Testing
 

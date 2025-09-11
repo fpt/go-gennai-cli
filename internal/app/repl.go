@@ -177,52 +177,24 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 		FuncFilterInputRune:    filterInput,
 	}
 
-	// Intercept key events; record printable runes and handle backspace at EOL.
+	// Simple listener - let readline handle everything, just sync our state
 	rlCfg.SetListener(func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
+		// Always sync our PromptBuilder state with readline's current state
+		pb.SyncFromReadline(line, pos)
+		
 		// Ctrl+C: allow readline to handle as interrupt
 		if key == 3 { // Ctrl+C
 			return nil, 0, false
 		}
-		// Ctrl+A: move to beginning; keep builder unchanged but update cursor.
-		if key == 1 { // Ctrl+A
-			vis := []rune(pb.VisiblePrompt())
-			return vis, 0, true
+		
+		// Ctrl+K: special case - clear our buffer completely if at start
+		if key == 11 && pos == 0 { // Ctrl+K at start
+			pb.Clear()
+			return []rune{}, 0, true
 		}
-		// Ctrl+K: kill to end of line. If at start, clear builder and line.
-		if key == 11 { // Ctrl+K
-			if pos == 0 {
-				pb.Clear()
-				return []rune{}, 0, true
-			}
-			// For mid-line positions we defer to readline; builder may diverge until submit.
-			return nil, 0, false
-		}
-		// TODO: Newline from paste: capture but do not submit
-		// if key == '\n' || key == '\r' {
-		// 	// Treat as part of content (likely from paste)
-		// 	pb.Input(key)
-		// 	vis := []rune(pb.VisiblePrompt())
-		// 	return vis, len(vis), true
-		// }
-		// Printable runes: append only when typing at end of line
-		if key >= 0x20 && key != 0x7f { // exclude DEL
-			if pos == len(line) {
-				pb.Input(key)
-			}
-			visiblePrompt := pb.VisiblePrompt()
-			vis := []rune(visiblePrompt)
-			return vis, len(vis), true
-		}
-		// Backspace (common codes: 127=DEL, 8=BS) when at end of line
-		if key == 127 || key == 8 {
-			if pos == len(line) {
-				pb.Backspace()
-			}
-			visiblePrompt := pb.VisiblePrompt()
-			vis := []rune(visiblePrompt)
-			return vis, len(vis), true
-		}
-		// Ignore navigation/other control keys; do not replace the line
+		
+		// Let readline handle all other keys (backspace, delete, arrows, typing, etc.)
+		// We don't interfere, just stay in sync
 		return nil, 0, false
 	})
 
@@ -271,6 +243,9 @@ func StartInteractiveMode(ctx context.Context, a *ScenarioRunner, scenario strin
 		} else if err == io.EOF {
 			break
 		}
+		
+		// Sync PromptBuilder with the final submitted line
+		pb.SyncFromReadline([]rune(line), len([]rune(line)))
 
 		// Handle slash commands using the raw buffer so paste compression
 		// in VisiblePrompt() does not interfere with detection.

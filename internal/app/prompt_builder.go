@@ -28,6 +28,8 @@ type PromptBuilder struct {
 	// paste-block backspace behavior are active. When false, input is
 	// treated purely as typed characters with no special paste handling.
 	usePaste bool
+	// cursorPos tracks the logical cursor position within the buffer
+	cursorPos int
 }
 
 // NewPromptBuilder creates a new PromptBuilder with the specified working directory and filesystem repository.
@@ -41,7 +43,8 @@ func NewPromptBuilder(fsRepo repository.FilesystemRepository, workingDir string)
 		workingDir: workingDir,
 		fsRepo:     fsRepo,
 		// Default: paste handling disabled unless explicitly enabled
-		usePaste: false,
+		usePaste:   false,
+		cursorPos:  0,
 	}
 }
 
@@ -55,11 +58,58 @@ func (p *PromptBuilder) SetUsePaste(use bool) {
 	p.usePaste = use
 }
 
-// Input appends a single character to the prompt buffer.
+// Input appends a single character to the prompt buffer at the end (legacy method).
 func (p *PromptBuilder) Input(r rune) {
+	p.InputAtCursor(r)
+}
+
+// InputAtCursor inserts a rune at the current cursor position.
+func (p *PromptBuilder) InputAtCursor(r rune) {
 	now := time.Now()
-	p.buf = append(p.buf, r)
-	p.times = append(p.times, now)
+	
+	// Ensure cursor position is valid
+	if p.cursorPos < 0 {
+		p.cursorPos = 0
+	}
+	if p.cursorPos > len(p.buf) {
+		p.cursorPos = len(p.buf)
+	}
+	
+	// Insert rune at cursor position
+	p.buf = append(p.buf[:p.cursorPos], append([]rune{r}, p.buf[p.cursorPos:]...)...)
+	p.times = append(p.times[:p.cursorPos], append([]time.Time{now}, p.times[p.cursorPos:]...)...)
+	
+	// Move cursor forward
+	p.cursorPos++
+}
+
+
+
+
+// SyncFromReadline updates the PromptBuilder's buffer and cursor from readline's state.
+// This is the authoritative way to keep PromptBuilder in sync with readline.
+func (p *PromptBuilder) SyncFromReadline(line []rune, pos int) {
+	// Update buffer from readline's line
+	p.buf = make([]rune, len(line))
+	copy(p.buf, line)
+	
+	// Update times array to match buffer length
+	now := time.Now()
+	if len(p.times) != len(line) {
+		p.times = make([]time.Time, len(line))
+		for i := range p.times {
+			p.times[i] = now
+		}
+	}
+	
+	// Update cursor position
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(p.buf) {
+		pos = len(p.buf)
+	}
+	p.cursorPos = pos
 }
 
 // VisiblePrompt returns the string to show in the UI.
@@ -211,47 +261,57 @@ func (p *PromptBuilder) SlashInput() string {
 	return ""
 }
 
-// Backspace removes the last rune if present, with smart @filename removal.
+// Backspace removes the rune before cursor position, with smart @filename removal.
 func (p *PromptBuilder) Backspace() {
 	n := len(p.buf)
-	if n == 0 {
+	if n == 0 || p.cursorPos == 0 {
 		return
 	}
 
-	// Check if we're at the end of an @filename pattern and remove the entire block
-	if p.isAtEndOfAtmarkPattern() {
-		p.removeLastAtmarkPattern()
-		return
-	}
+	// For backward compatibility, if cursor is at the end, use old logic
+	if p.cursorPos == n {
+		// Check if we're at the end of an @filename pattern and remove the entire block
+		if p.isAtEndOfAtmarkPattern() {
+			p.removeLastAtmarkPattern()
+			// Update cursor position after pattern removal
+			p.cursorPos = len(p.buf)
+			return
+		}
 
-	if p.usePaste {
-		// If the last two runes were entered within pasteInterval, treat the
-		// trailing contiguous fast-typed region as a single unit and delete it.
-		if n >= 2 && p.times[n-1].Sub(p.times[n-2]) < pasteInterval {
-			// Find left boundary (matching VisiblePrompt compression rule)
-			start := n - 2
-			for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
-				start--
-			}
-			// If the burst began near the start and stayed within the initial window, include first char.
-			if start == 1 && p.times[n-1].Sub(p.times[0]) <= initialPasteWindow {
-				start = 0
-			}
-			blockLen := n - start
-			if blockLen >= minPasteBlockLen {
-				// Delete [start..n-1]
-				p.buf = append(p.buf[:start], p.buf[n:]...)
-				p.times = append(p.times[:start], p.times[n:]...)
-				return
+		if p.usePaste {
+			// If the last two runes were entered within pasteInterval, treat the
+			// trailing contiguous fast-typed region as a single unit and delete it.
+			if n >= 2 && p.times[n-1].Sub(p.times[n-2]) < pasteInterval {
+				// Find left boundary (matching VisiblePrompt compression rule)
+				start := n - 2
+				for start > 0 && p.times[start].Sub(p.times[start-1]) < pasteInterval {
+					start--
+				}
+				// If the burst began near the start and stayed within the initial window, include first char.
+				if start == 1 && p.times[n-1].Sub(p.times[0]) <= initialPasteWindow {
+					start = 0
+				}
+				blockLen := n - start
+				if blockLen >= minPasteBlockLen {
+					// Delete [start..n-1]
+					p.buf = append(p.buf[:start], p.buf[n:]...)
+					p.times = append(p.times[:start], p.times[n:]...)
+					p.cursorPos = start
+					return
+				}
 			}
 		}
 	}
-	// Otherwise, delete one rune
-	p.buf = p.buf[:n-1]
-	if len(p.times) > 0 {
-		p.times = p.times[:len(p.times)-1]
+
+	// Delete the rune before cursor position
+	deletePos := p.cursorPos - 1
+	p.buf = append(p.buf[:deletePos], p.buf[p.cursorPos:]...)
+	if len(p.times) > deletePos {
+		p.times = append(p.times[:deletePos], p.times[p.cursorPos:]...)
 	}
+	p.cursorPos--
 }
+
 
 // isAtEndOfAtmarkPattern checks if the cursor is at the end of an @filename pattern
 func (p *PromptBuilder) isAtEndOfAtmarkPattern() bool {
@@ -293,6 +353,7 @@ func (p *PromptBuilder) removeLastAtmarkPattern() {
 func (p *PromptBuilder) Clear() {
 	p.buf = p.buf[:0]
 	p.times = p.times[:0]
+	p.cursorPos = 0
 }
 
 // Len returns the current rune length.
